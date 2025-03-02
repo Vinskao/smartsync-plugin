@@ -66,7 +66,7 @@ function crawler_crawl_data() {
                         // 準備 CSV 資料
                         $notes = is_array($row['note']) ? implode('; ', $row['note']) : $row['note'];
                         $description = (is_array($row['qa_text']) ? implode('; ', $row['qa_text']) : $row['qa_text']) . '; ' . 
-                                       (is_array($row['intro_text']) ? implode('; ', $row['intro_text']) : $row['intro_text']));
+                        (is_array($row['intro_text']) ? implode('; ', $row['intro_text']) : $row['intro_text']);         
                         $all_img = isset($row['images']) && is_array($row['images']) ? implode('; ', $row['images']) : '';
                         $aqara_img = isset($row['aqara_images']) && is_array($row['aqara_images']) ? implode('; ', $row['aqara_images']) : '';
                         $images = !empty($aqara_img) ? $aqara_img : $all_img;
