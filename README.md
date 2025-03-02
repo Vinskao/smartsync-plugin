@@ -7,3 +7,7 @@
 ```shell
 Compress-Archive -Path ".\smartsync-crawler.php" -DestinationPath ".\smartsync-crawler.zip" -Force
 ```
+
+```bash
+zip smartsync-crawler.zip smartsync-crawler.php
+```

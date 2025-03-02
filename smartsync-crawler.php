@@ -66,7 +66,7 @@ function crawler_crawl_data() {
                         // 準備 CSV 資料
                         $notes = is_array($row['note']) ? implode('; ', $row['note']) : $row['note'];
                         $description = (is_array($row['qa_text']) ? implode('; ', $row['qa_text']) : $row['qa_text']) . '; ' . 
-                                       (is_array($row['intro_text']) ? implode('; ', $row['intro_text']) : $row['intro_text']);
+                                       (is_array($row['intro_text']) ? implode('; ', $row['intro_text']) : $row['intro_text']));
                         $all_img = isset($row['images']) && is_array($row['images']) ? implode('; ', $row['images']) : '';
                         $aqara_img = isset($row['aqara_images']) && is_array($row['aqara_images']) ? implode('; ', $row['aqara_images']) : '';
                         $images = !empty($aqara_img) ? $aqara_img : $all_img;
@@ -127,6 +127,7 @@ function crawler_crawl_data() {
 
 // 獲取分類連結 (在進入主頁前設定 items_per_page 為 96)
 function crawler_get_category_urls($url) {
+    // 確保 URL 包含 items_per_page=96 參數
     $url = add_query_arg('items_per_page', '96', $url);
     $html = crawler_fetch_html($url);
     if (!$html) return [];
@@ -136,28 +137,52 @@ function crawler_get_category_urls($url) {
     $xpath = new DOMXPath($dom);
     $category_urls = [];
     
-    // 查找所有子選單連結
-    $category_links = $xpath->query('//a[contains(@class, "ty-menu__submenu-link")]');
-    foreach ($category_links as $link) {
-        $href = $link->getAttribute('href');
-        $text = trim($link->nodeValue);
-        
-        if (stripos($text, 'Aqara') !== false || stripos($href, 'aqara') !== false) {
-            $href = crawler_normalize_url($href);
-            if ($href) {
-                $category_urls[] = add_query_arg('items_per_page', '96', $href);
+    // 使用多個選擇器查找所有可能的類別連結
+    $selectors = [
+        '//a[contains(@class, "ty-menu__submenu-link")]',
+        '//a[contains(@class, "ty-menu__item-link")]',
+        '//div[contains(@class, "ty-menu__submenu")]//a',
+        '//div[contains(@class, "categories-menu")]//a',
+        '//nav//a[contains(@href, "category")]',
+        '//ul[contains(@class, "menu")]//a'
+    ];
+    
+    foreach ($selectors as $selector) {
+        $links = $xpath->query($selector);
+        foreach ($links as $link) {
+            $href = $link->getAttribute('href');
+            $text = trim($link->nodeValue);
+            
+            // 放寬過濾條件或完全移除 Aqara 限制
+            // 如果您確實只需要 Aqara 產品，請保留此條件
+            if (stripos($text, 'Aqara') !== false || stripos($href, 'aqara') !== false) {
+                $href = crawler_normalize_url($href);
+                if ($href) {
+                    // 確保每個分類連結都包含 items_per_page=96 參數
+                    $category_urls[] = add_query_arg('items_per_page', '96', $href);
+                }
             }
         }
     }
     
-    // 檢查分頁
-    $pagination_links = $xpath->query('//a[contains(@class, "ty-pagination__item")]');
-    foreach ($pagination_links as $link) {
-        $href = $link->getAttribute('href');
-        if (!empty($href) && strpos($href, 'page=') !== false) {
-            $href = crawler_normalize_url($href);
-            if ($href) {
-                $category_urls[] = add_query_arg('items_per_page', '96', $href);
+    // 改進分頁處理
+    $pagination_selectors = [
+        '//a[contains(@class, "ty-pagination__item")]',
+        '//div[contains(@class, "pagination")]//a',
+        '//ul[contains(@class, "pagination")]//a',
+        '//a[contains(@href, "page=")]'
+    ];
+    
+    foreach ($pagination_selectors as $selector) {
+        $pagination_links = $xpath->query($selector);
+        foreach ($pagination_links as $link) {
+            $href = $link->getAttribute('href');
+            if (!empty($href) && strpos($href, 'page=') !== false) {
+                $href = crawler_normalize_url($href);
+                if ($href) {
+                    // 確保分頁連結也包含 items_per_page=96 參數
+                    $category_urls[] = add_query_arg('items_per_page', '96', $href);
+                }
             }
         }
     }
@@ -196,12 +221,12 @@ function crawler_process_page($url, &$all_images) {
             }
         }
 
-        // 改善產品連結選擇器，僅抓取商品的連結
+        // 只抓取具有 product-title 類別的產品連結
         $product_urls = [];
         $product_selectors = [
-            '//li[contains(@class, "ty-grid-list__item")]//a[contains(@class, "product-title")]',
-            '//div[contains(@class, "grid-list__item")]//a[contains(@class, "product-title")]'
+            '//a[contains(@class, "product-title")]'
         ];
+        
         foreach ($product_selectors as $selector) {
             $elements = $xpath->query($selector);
             foreach ($elements as $element) {
