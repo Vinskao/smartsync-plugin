@@ -6,7 +6,7 @@ Version: 1.0
 Author: VinsKao
 */
 
-// 主要爬蟲函數
+// 主要爬蟲函數：採用緩衝批次寫入以減少 I/O 操作
 function crawler_crawl_data() {
     if (!isset($_POST['crawler_action']) || $_POST['crawler_action'] !== 'start_crawl') return;
     
@@ -18,46 +18,61 @@ function crawler_crawl_data() {
         $output_dir = __DIR__ . '/output';
         if (!file_exists($output_dir)) mkdir($output_dir, 0755, true);
         
-        // 爬取分類連結
+        // 爬取分類連結 (同時設定 items_per_page 為 96)
         $main_url = 'https://www.jarvis.com.tw/aqara智能居家/';
         $category_urls = crawler_get_category_urls($main_url);
-        file_put_contents("$output_dir/category_urls.txt", implode("\n", $category_urls));
+        // 使用緩衝批次寫入分類連結到檔案
+        $categories_file = "$output_dir/category_urls.txt";
+        $fp_cat = fopen($categories_file, 'w');
+        $batch_size = 10; // 每 10 筆為一批寫入
+        $buffer = [];
+        foreach ($category_urls as $url) {
+            $buffer[] = $url;
+            if (count($buffer) >= $batch_size) {
+                fwrite($fp_cat, implode("\n", $buffer) . "\n");
+                $buffer = [];
+            }
+        }
+        if (!empty($buffer)) {
+            fwrite($fp_cat, implode("\n", $buffer) . "\n");
+        }
+        fclose($fp_cat);
         
-        // 準備 CSV 檔案
+        // 準備 CSV 檔案，並寫入表頭
         $csv_file = "$output_dir/jarvis_products_" . date('Y-m-d_H-i-s') . '.csv';
         $fp = fopen($csv_file, 'w');
         fputs($fp, "\xEF\xBB\xBF"); // UTF-8 BOM
         fputcsv($fp, ['名稱', '簡短內容說明', '原價', '特價', '描述', '圖片', '購買備註', '外部網址']);
-        fclose($fp);
         
-        // 批次處理
-        $start_time = time();
         $total_products = 0;
-        $batch_size = 3;
+        $batch_size = 3; // 每次處理的分類數量
+        $buffer = [];    // 緩衝區：暫存本批次待寫入的資料列
+        $start_time = time();
         $all_images = [];
         
+        // 分批處理分類
         for ($i = 0; $i < count($category_urls); $i += $batch_size) {
             if (time() - $start_time > 240) { // 4分鐘超時
                 throw new Exception("執行時間過長，已處理 $i 個分類，總共 " . count($category_urls) . " 個。");
             }
             
             $batch_categories = array_slice($category_urls, $i, $batch_size);
-            $batch_product_count = 0;
             
             foreach ($batch_categories as $category_url) {
                 $category_product_data = crawler_process_page($category_url, $all_images);
                 
                 if (is_array($category_product_data)) {
-                    $fp = fopen($csv_file, 'a');
                     foreach ($category_product_data as $row) {
                         // 準備 CSV 資料
                         $notes = is_array($row['note']) ? implode('; ', $row['note']) : $row['note'];
                         $description = (is_array($row['qa_text']) ? implode('; ', $row['qa_text']) : $row['qa_text']) . '; ' . 
-                                     (is_array($row['intro_text']) ? implode('; ', $row['intro_text']) : $row['intro_text']);
+                                       (is_array($row['intro_text']) ? implode('; ', $row['intro_text']) : $row['intro_text']);
                         $all_img = isset($row['images']) && is_array($row['images']) ? implode('; ', $row['images']) : '';
                         $aqara_img = isset($row['aqara_images']) && is_array($row['aqara_images']) ? implode('; ', $row['aqara_images']) : '';
                         $images = !empty($aqara_img) ? $aqara_img : $all_img;
-                        fputcsv($fp, [
+                        
+                        // 將每筆資料存入緩衝區
+                        $buffer[] = [
                             $row['title'],
                             $notes,
                             $row['price'],
@@ -66,17 +81,24 @@ function crawler_crawl_data() {
                             $images,
                             $row['spec_image'],
                             $row['videolink_text']
-                        ]);
-                        $batch_product_count++;
+                        ];
+                        $total_products++;
                     }
-                    fclose($fp);
                 }
             }
             
+            // 批次寫入緩衝資料到 CSV 檔案
+            foreach ($buffer as $csv_row) {
+                fputcsv($fp, $csv_row);
+            }
+            fflush($fp);
+            $buffer = []; // 清空緩衝區
+            
             // 清理記憶體
             gc_collect_cycles();
-            $total_products += $batch_product_count;
         }
+        
+        fclose($fp);
         
         // 儲存圖片列表
         file_put_contents("$output_dir/all_images.txt", implode("\n", $all_images));
@@ -103,7 +125,7 @@ function crawler_crawl_data() {
     }
 }
 
-// 獲取分類連結
+// 獲取分類連結 (在進入主頁前設定 items_per_page 為 96)
 function crawler_get_category_urls($url) {
     $url = add_query_arg('items_per_page', '96', $url);
     $html = crawler_fetch_html($url);
@@ -130,7 +152,6 @@ function crawler_get_category_urls($url) {
     
     // 檢查分頁
     $pagination_links = $xpath->query('//a[contains(@class, "ty-pagination__item")]');
-    // 移除重複的 URL
     foreach ($pagination_links as $link) {
         $href = $link->getAttribute('href');
         if (!empty($href) && strpos($href, 'page=') !== false) {
@@ -145,78 +166,79 @@ function crawler_get_category_urls($url) {
     return array_unique($category_urls);
 }
 
-// 處理分類頁面
+// 處理分類頁面，支援抓取分頁所有產品
 function crawler_process_page($url, &$all_images) {
-    $html = crawler_fetch_html($url);
-    if (!$html) return false;
-
-    // 創建調試目錄
-    $debug_dir = defined('WP_CONTENT_DIR') ? WP_CONTENT_DIR . '/crawler_debug' : __DIR__ . '/crawler_debug';
-    if (!file_exists($debug_dir)) mkdir($debug_dir, 0755, true);
-    
-    // 保存原始 HTML 文件
-    $dom = new DOMDocument();
-    @$dom->loadHTML($html);
-    $xpath = new DOMXPath($dom);
-
-    // 收集圖片 (限制數量)
-    $images = $xpath->query('//img');
-    $img_count = 0;
-    $max_images = 100;
-    
-    // 收集圖片
-    foreach ($images as $img) {
-        if ($img_count >= $max_images) break;
-        $src = $img->getAttribute('src');
-        // 處理圖片 URL
-        if (!empty($src)) {
-            if (strpos($src, 'http') !== 0) {
-                $src = (($src[0] == '/') ? 'https://www.jarvis.com.tw' : 'https://www.jarvis.com.tw/') . $src;
-            }
-            $all_images[] = $src;
-            $img_count++;
-        }
-    }
-
-    // 收集產品連結
-    $product_urls = [];
-    $product_selectors = [
-        '//.ty-grid-list__item a',
-        '//div[contains(@class, "grid-list__item")]//a',
-        '//div[contains(@class, "product-item")]//a',
-        '//div[contains(@class, "product")]//a[contains(@href, "product")]',
-        '//a[contains(@href, "/product/")]',
-        '//a[contains(@class, "product")]',
-        '//a[contains(@href, "aqara")]'
-    ];
-    
-    foreach ($product_selectors as $selector) {
-        $elements = $xpath->query($selector);
-        foreach ($elements as $element) {
-            $href = $element->getAttribute('href');
-            if (!empty($href)) {
-                if (strpos($href, 'http') !== 0) {
-                    $href = (($href[0] == '/') ? 'https://www.jarvis.com.tw' : 'https://www.jarvis.com.tw/') . $href;
-                }
-                $product_urls[] = $href;
-            }
-        }
-    }
-    
-    // 去除重複的 URL 並限制數量
-    $product_urls = array_slice(array_unique($product_urls), 0, 20);
-    
-    // 處理每個產品頁面
     $all_product_data = [];
-    foreach ($product_urls as $product_url) {
-        $product_data = crawler_process_product_page($product_url, $all_images);
-        if ($product_data) {
-            $all_product_data[] = $product_data;
+    // 持續處理分頁，直到找不到下一頁
+    do {
+        // 強制設定每頁顯示 96 筆
+        $url = add_query_arg('items_per_page', '96', $url);
+        $html = crawler_fetch_html($url);
+        if (!$html) break;
+        
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
+        $xpath = new DOMXPath($dom);
+
+        // 收集圖片（保留原有邏輯）
+        $images = $xpath->query('//img');
+        $img_count = 0;
+        $max_images = 100;
+        foreach ($images as $img) {
+            if ($img_count >= $max_images) break;
+            $src = $img->getAttribute('src');
+            if (!empty($src)) {
+                if (strpos($src, 'http') !== 0) {
+                    $src = (($src[0] == '/') ? 'https://www.jarvis.com.tw' : 'https://www.jarvis.com.tw/') . $src;
+                }
+                $all_images[] = $src;
+                $img_count++;
+            }
         }
-    }
+
+        // 改善產品連結選擇器，僅抓取商品的連結
+        $product_urls = [];
+        $product_selectors = [
+            '//li[contains(@class, "ty-grid-list__item")]//a[contains(@class, "product-title")]',
+            '//div[contains(@class, "grid-list__item")]//a[contains(@class, "product-title")]'
+        ];
+        foreach ($product_selectors as $selector) {
+            $elements = $xpath->query($selector);
+            foreach ($elements as $element) {
+                $href = $element->getAttribute('href');
+                if (!empty($href)) {
+                    if (strpos($href, 'http') !== 0) {
+                        $href = crawler_normalize_url($href);
+                    }
+                    $product_urls[] = $href;
+                }
+            }
+        }
+        $product_urls = array_unique($product_urls);
+
+        // 處理當前頁面所有產品
+        foreach ($product_urls as $product_url) {
+            $product_data = crawler_process_product_page($product_url, $all_images);
+            if ($product_data) {
+                $all_product_data[] = $product_data;
+            }
+        }
+
+        // 嘗試取得下一頁分頁連結（依據 CS-Cart 常見分頁樣式）
+        $next_page_element = $xpath->query('//a[contains(@class, "ty-pagination__btn--next")]')->item(0);
+        if ($next_page_element) {
+            $next_url = $next_page_element->getAttribute('href');
+            $url = crawler_normalize_url($next_url);
+            // 強制補上 items_per_page=96
+            $url = add_query_arg('items_per_page', '96', $url);
+        } else {
+            $url = null;
+        }
+    } while ($url);
 
     return $all_product_data;
 }
+
 
 // 處理產品頁面
 function crawler_process_product_page($url, &$all_images) {
@@ -240,7 +262,6 @@ function crawler_process_product_page($url, &$all_images) {
         'videolink_text' => ['//.ty-product-video iframe', '//iframe[contains(@src, "youtube")]']
     ];
     
-    // 找出最佳選擇器
     $best_selectors = [];
     foreach ($selectors as $field => $selector_list) {
         foreach ($selector_list as $selector) {
@@ -292,7 +313,6 @@ function crawler_process_product_page($url, &$all_images) {
         if (empty($product_data['title'])) $product_data['title'] = basename($url);
     }
     
-    // 其他資料
     $product_data['note'] = isset($best_selectors['note']) ? crawler_get_texts($xpath, $best_selectors['note']) : [];
     $product_data['price'] = isset($best_selectors['price']) ? crawler_get_text($xpath, $best_selectors['price']) : '';
     $product_data['price_actual'] = isset($best_selectors['price_actual']) ? crawler_get_text($xpath, $best_selectors['price_actual']) : $product_data['price'];
@@ -309,14 +329,12 @@ function crawler_process_product_page($url, &$all_images) {
 
 // 獲取 HTML 內容
 function crawler_fetch_html($url) {
-    // 使用 file_get_contents 作為備選方案
     if (!function_exists('curl_init')) {
         $opts = ['http' => ['method' => 'GET', 'header' => 'User-Agent: Mozilla/5.0', 'timeout' => 15]];
         $context = stream_context_create($opts);
         return @file_get_contents($url, false, $context);
     }
 
-    // 使用 cURL
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
@@ -420,10 +438,7 @@ function crawler_admin_page() {
             if (file_exists($categories_file)) {
                 echo '<h2>分類連結</h2>';
                 echo '<p>分類連結已保存到: ' . $categories_file . '</p>';
-                
-                // 添加下載按鈕
                 echo '<p><a href="' . admin_url('admin-post.php?action=download_category_urls') . '" class="button button-secondary">下載分類連結檔案</a></p>';
-                
                 if (filesize($categories_file) < 10240) {
                     echo '<pre style="max-height: 300px; overflow-y: auto; background: #f5f5f5; padding: 10px; border: 1px solid #ddd;">';
                     echo htmlspecialchars(file_get_contents($categories_file));
@@ -447,7 +462,7 @@ function crawler_handle_post() {
 }
 add_action('admin_post_run_crawler', 'crawler_handle_post');
 
-// WP-CLI 命令
+// WP-CLI 命令（同樣採用緩衝批次寫入方式）
 if (defined('WP_CLI') && WP_CLI) {
     WP_CLI::add_command('smartsync crawl', function() {
         if (!defined('ABSPATH')) {
@@ -482,18 +497,20 @@ if (defined('WP_CLI') && WP_CLI) {
         
         $output = fopen($file_path, 'w');
         fputs($output, "\xEF\xBB\xBF"); // UTF-8 BOM
-        
         fputcsv($output, ['名稱', '簡短內容說明', '原價', '特價', '描述', '圖片', '購買備註', '外部網址']);
         
+        // 使用緩衝區批次寫入 CSV（例如每 50 筆為一批）
+        $batch_size = 50;
+        $buffer = [];
         foreach ($all_product_data as $row) {
             $notes = is_array($row['note']) ? implode('; ', $row['note']) : $row['note'];
             $description = (is_array($row['qa_text']) ? implode('; ', $row['qa_text']) : $row['qa_text']) . '; ' . 
-                          (is_array($row['intro_text']) ? implode('; ', $row['intro_text']) : $row['intro_text']);
+                           (is_array($row['intro_text']) ? implode('; ', $row['intro_text']) : $row['intro_text']);
             $all_img = isset($row['images']) && is_array($row['images']) ? implode('; ', $row['images']) : '';
             $aqara_img = isset($row['aqara_images']) && is_array($row['aqara_images']) ? implode('; ', $row['aqara_images']) : '';
             $images = !empty($aqara_img) ? $aqara_img : $all_img;
             
-            fputcsv($output, [
+            $buffer[] = [
                 $row['title'],
                 $notes,
                 $row['price'],
@@ -502,9 +519,22 @@ if (defined('WP_CLI') && WP_CLI) {
                 $images,
                 $row['spec_image'],
                 $row['videolink_text']
-            ]);
+            ];
+            
+            if (count($buffer) >= $batch_size) {
+                foreach ($buffer as $csv_row) {
+                    fputcsv($output, $csv_row);
+                }
+                fflush($output);
+                $buffer = [];
+            }
         }
-        
+        // 寫入剩餘的資料
+        if (!empty($buffer)) {
+            foreach ($buffer as $csv_row) {
+                fputcsv($output, $csv_row);
+            }
+        }
         fclose($output);
         
         WP_CLI::success('爬蟲已完成運行！共爬取 ' . count($all_product_data) . ' 筆資料，收集 ' . count($all_images) . ' 張圖片。CSV 文件已保存到：' . $file_path);
@@ -588,8 +618,23 @@ function crawler_get_categories_only() {
         $main_url = 'https://www.jarvis.com.tw/aqara智能居家/';
         $category_urls = crawler_get_category_urls($main_url);
         
+        // 使用緩衝批次寫入分類連結到檔案
         $categories_file = "$output_dir/category_urls.txt";
-        file_put_contents($categories_file, implode("\n", $category_urls));
+        $fp_cat = fopen($categories_file, 'w');
+        $batch_size = 10;
+        $buffer = [];
+        foreach ($category_urls as $url) {
+            $buffer[] = $url;
+            if (count($buffer) >= $batch_size) {
+                fwrite($fp_cat, implode("\n", $buffer) . "\n");
+                $buffer = [];
+            }
+        }
+        if (!empty($buffer)) {
+            fwrite($fp_cat, implode("\n", $buffer) . "\n");
+        }
+        fclose($fp_cat);
+        
         update_option('crawler_last_run', current_time('mysql'));
         
         crawler_download_file($categories_file, 'text/plain');
