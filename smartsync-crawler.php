@@ -10,8 +10,8 @@ Author: VinsKao
 function crawler_crawl_data() {
     if (!isset($_POST['crawler_action']) || $_POST['crawler_action'] !== 'start_crawl') return;
     
-    set_time_limit(300);
-    ini_set('memory_limit', '256M');
+    set_time_limit(600); // 增加到10分鐘
+    ini_set('memory_limit', '512M'); // 增加記憶體限制
     
     try {
         // 創建輸出目錄
@@ -45,46 +45,94 @@ function crawler_crawl_data() {
         fputcsv($fp, ['名稱', '簡短內容說明', '原價', '特價', '描述', '圖片', '購買備註', '外部網址']);
         
         $total_products = 0;
-        $batch_size = 3; // 每次處理的分類數量
+        $batch_size = 5; // 每次處理的分類數量
         $buffer = [];    // 緩衝區：暫存本批次待寫入的資料列
         $start_time = time();
         $all_images = [];
+        $processed_urls = []; // 追蹤已處理的URL，避免重複
         
         // 分批處理分類
         for ($i = 0; $i < count($category_urls); $i += $batch_size) {
-            if (time() - $start_time > 240) { // 4分鐘超時
+            if (time() - $start_time > 540) { // 9分鐘超時，留出時間寫入資料
                 throw new Exception("執行時間過長，已處理 $i 個分類，總共 " . count($category_urls) . " 個。");
             }
             
             $batch_categories = array_slice($category_urls, $i, $batch_size);
+            $batch_results = [];
             
-            foreach ($batch_categories as $category_url) {
-                $category_product_data = crawler_process_page($category_url, $all_images);
+            // 使用多進程或多執行緒處理（如果環境支援）
+            if (function_exists('pcntl_fork') && function_exists('pcntl_waitpid')) {
+                // 使用 PCNTL 進行並行處理（僅在 Linux/Unix 環境）
+                $pids = [];
+                $temp_files = [];
                 
-                if (is_array($category_product_data)) {
-                    foreach ($category_product_data as $row) {
-                        // 準備 CSV 資料
-                        $notes = is_array($row['note']) ? implode('; ', $row['note']) : $row['note'];
-                        $description = (is_array($row['qa_text']) ? implode('; ', $row['qa_text']) : $row['qa_text']) . '; ' . 
-                        (is_array($row['intro_text']) ? implode('; ', $row['intro_text']) : $row['intro_text']);         
-                        $all_img = isset($row['images']) && is_array($row['images']) ? implode('; ', $row['images']) : '';
-                        $aqara_img = isset($row['aqara_images']) && is_array($row['aqara_images']) ? implode('; ', $row['aqara_images']) : '';
-                        $images = !empty($aqara_img) ? $aqara_img : $all_img;
-                        
-                        // 將每筆資料存入緩衝區
-                        $buffer[] = [
-                            $row['title'],
-                            $notes,
-                            $row['price'],
-                            $row['price_actual'],
-                            $description,
-                            $images,
-                            $row['spec_image'],
-                            $row['videolink_text']
-                        ];
-                        $total_products++;
+                foreach ($batch_categories as $index => $category_url) {
+                    $pid = pcntl_fork();
+                    if ($pid == -1) {
+                        // 無法創建子進程，回退到串行處理
+                        $category_product_data = crawler_process_page($category_url, $all_images, $processed_urls);
+                        if (is_array($category_product_data)) {
+                            $batch_results = array_merge($batch_results, $category_product_data);
+                        }
+                    } elseif ($pid == 0) {
+                        // 子進程
+                        $category_product_data = crawler_process_page($category_url, $all_images, $processed_urls);
+                        $temp_file = tempnam(sys_get_temp_dir(), 'crawler_');
+                        file_put_contents($temp_file, serialize($category_product_data));
+                        exit(0);
+                    } else {
+                        // 父進程
+                        $pids[$pid] = $index;
+                        $temp_files[$index] = tempnam(sys_get_temp_dir(), 'crawler_');
                     }
                 }
+                
+                // 等待所有子進程完成
+                foreach ($pids as $pid => $index) {
+                    pcntl_waitpid($pid, $status);
+                    if (file_exists($temp_files[$index])) {
+                        $data = unserialize(file_get_contents($temp_files[$index]));
+                        if (is_array($data)) {
+                            $batch_results = array_merge($batch_results, $data);
+                        }
+                        unlink($temp_files[$index]);
+                    }
+                }
+            } else {
+                // 串行處理（如果不支援多進程）
+                foreach ($batch_categories as $category_url) {
+                    if (in_array($category_url, $processed_urls)) continue;
+                    $processed_urls[] = $category_url;
+                    
+                    $category_product_data = crawler_process_page($category_url, $all_images, $processed_urls);
+                    if (is_array($category_product_data)) {
+                        $batch_results = array_merge($batch_results, $category_product_data);
+                    }
+                }
+            }
+            
+            // 處理批次結果
+            foreach ($batch_results as $row) {
+                // 準備 CSV 資料
+                $notes = is_array($row['note']) ? implode('; ', $row['note']) : $row['note'];
+                $description = (is_array($row['qa_text']) ? implode('; ', $row['qa_text']) : $row['qa_text']) . '; ' . 
+                (is_array($row['intro_text']) ? implode('; ', $row['intro_text']) : $row['intro_text']);         
+                $all_img = isset($row['images']) && is_array($row['images']) ? implode('; ', $row['images']) : '';
+                $aqara_img = isset($row['aqara_images']) && is_array($row['aqara_images']) ? implode('; ', $row['aqara_images']) : '';
+                $images = !empty($aqara_img) ? $aqara_img : $all_img;
+                
+                // 將每筆資料存入緩衝區
+                $buffer[] = [
+                    $row['title'],
+                    $notes,
+                    $row['price'],
+                    $row['price_actual'],
+                    $description,
+                    $images,
+                    $row['spec_image'],
+                    $row['videolink_text']
+                ];
+                $total_products++;
             }
             
             // 批次寫入緩衝資料到 CSV 檔案
@@ -126,8 +174,8 @@ function crawler_crawl_data() {
 }
 
 // 獲取分類連結 (在進入主頁前設定 items_per_page 為 96)
+/* 修改 crawler_get_category_urls 函數，加入深度限制和過濾機制 */
 function crawler_get_category_urls($url) {
-    // 確保 URL 包含 items_per_page=96 參數
     $url = add_query_arg('items_per_page', '96', $url);
     $html = crawler_fetch_html($url);
     if (!$html) return [];
@@ -136,147 +184,241 @@ function crawler_get_category_urls($url) {
     @$dom->loadHTML($html);
     $xpath = new DOMXPath($dom);
     $category_urls = [];
-    
-    // 使用多個選擇器查找所有可能的類別連結
+
+    // 擴展選擇器：抓取所有可能的分類連結
     $selectors = [
-        '//a[contains(@class, "ty-menu__submenu-link")]',
-        '//a[contains(@class, "ty-menu__item-link")]',
-        '//div[contains(@class, "ty-menu__submenu")]//a',
-        '//div[contains(@class, "categories-menu")]//a',
-        '//nav//a[contains(@href, "category")]',
-        '//ul[contains(@class, "menu")]//a'
+        '//a[contains(@href,"category") and contains(@href,"items_per_page=96")]',
+        '//a[contains(@href,"/aqara") and contains(@href,"items_per_page=96")]',
+        '//a[contains(@class, "ty-menu__submenu-link") and contains(@href, "/aqara")]',
+        '//a[contains(@class, "ty-menu__item-link") and contains(@href, "/aqara")]',
+        '//div[contains(@class, "ty-menu__submenu")]//a[contains(@href, "/aqara")]',
+        '//div[contains(@class, "categories-menu")]//a[contains(@href, "/aqara")]',
+        '//nav//a[contains(@href, "category") or contains(@href, "/aqara")]'
     ];
-    
+
     foreach ($selectors as $selector) {
         $links = $xpath->query($selector);
         foreach ($links as $link) {
-            $href = $link->getAttribute('href');
-            $text = trim($link->nodeValue);
-            
-            // 放寬過濾條件或完全移除 Aqara 限制
-            // 如果您確實只需要 Aqara 產品，請保留此條件
-            if (stripos($text, 'Aqara') !== false || stripos($href, 'aqara') !== false) {
-                $href = crawler_normalize_url($href);
-                if ($href) {
-                    // 確保每個分類連結都包含 items_per_page=96 參數
-                    $category_urls[] = add_query_arg('items_per_page', '96', $href);
+            $href = crawler_normalize_url($link->getAttribute('href'));
+            if (!empty($href) && strpos($href, 'http') === 0) {
+                $category_urls[] = $href;
+
+                // 深度處理分頁：對於每個分類 URL，檢查其分頁
+                $sub_html = crawler_fetch_html($href);
+                if ($sub_html) {
+                    $sub_dom = new DOMDocument();
+                    @$sub_dom->loadHTML($sub_html);
+                    $sub_xpath = new DOMXPath($sub_dom);
+
+                    $pag_selectors = [
+                        '//a[contains(@class, "ty-pagination__item") and contains(@href, "page=")]',
+                        '//div[contains(@class, "pagination")]//a[contains(@href, "page=")]',
+                        '//ul[contains(@class, "pagination")]//a[contains(@href, "page=")]',
+                        '//a[contains(@href, "page=")]'
+                    ];
+
+                    foreach ($pag_selectors as $pag_selector) {
+                        $pag_links = $sub_xpath->query($pag_selector);
+                        foreach ($pag_links as $pag_link) {
+                            $pag_href = crawler_normalize_url($pag_link->getAttribute('href'));
+                            if (!empty($pag_href) && strpos($pag_href, 'page=') !== false) {
+                                $category_urls[] = add_query_arg('items_per_page', '96', $pag_href);
+                            }
+                        }
+                    }
                 }
             }
         }
     }
-    
-    // 改進分頁處理
-    $pagination_selectors = [
-        '//a[contains(@class, "ty-pagination__item")]',
-        '//div[contains(@class, "pagination")]//a',
-        '//ul[contains(@class, "pagination")]//a',
-        '//a[contains(@href, "page=")]'
-    ];
-    
-    foreach ($pagination_selectors as $selector) {
-        $pagination_links = $xpath->query($selector);
-        foreach ($pagination_links as $link) {
-            $href = $link->getAttribute('href');
-            if (!empty($href) && strpos($href, 'page=') !== false) {
-                $href = crawler_normalize_url($href);
-                if ($href) {
-                    // 確保分頁連結也包含 items_per_page=96 參數
-                    $category_urls[] = add_query_arg('items_per_page', '96', $href);
-                }
-            }
-        }
-    }
-    
+
+    // 移除過濾條件，確保抓取所有層次
     $category_urls[] = $url;
-    return array_unique($category_urls);
+    return array_values(array_unique($category_urls));
 }
 
 // 處理分類頁面，支援抓取分頁所有產品
-function crawler_process_page($url, &$all_images) {
+/* 強化 crawler_process_page 的產品連結抓取邏輯 */
+function crawler_process_page($url, &$all_images, &$processed_urls = []) {
     $all_product_data = [];
-    // 持續處理分頁，直到找不到下一頁
+    
+    // 避免重複處理
+    if (in_array($url, $processed_urls)) {
+        return $all_product_data;
+    }
+    $processed_urls[] = $url;
+    
+    // 解析原始 URL 保留所有參數
+    $parsed_url = parse_url($url);
+    $base_path = $parsed_url['path'] ?? '';
+    $base_query = isset($parsed_url['query']) ? $parsed_url['query'] : '';
+    
+    // 合併原始查詢參數
+    parse_str($base_query, $query_params);
+    $query_params['items_per_page'] = 96; // 確保每頁顯示96
+    
+    $page = 1;
+    $max_attempts = 3; // 最大嘗試次數
+    $retry_count = 0;
+
     do {
-        // 強制設定每頁顯示 96 筆
-        $url = add_query_arg('items_per_page', '96', $url);
-        $html = crawler_fetch_html($url);
-        if (!$html) break;
+        // 構建分頁參數
+        $query_params['page'] = $page;
+        $new_query = http_build_query($query_params);
         
+        // 重建完整 URL
+        $paged_url = "https://www.jarvis.com.tw{$base_path}?{$new_query}";
+        
+        error_log("[分頁請求] {$paged_url}");
+
+        $html = crawler_fetch_html($paged_url);
+        if (!$html) {
+            if ($retry_count < $max_attempts) {
+                $retry_count++;
+                error_log("[分頁異常] 第 {$retry_count} 次重試...");
+                sleep(1); // 短暫等待後重試
+                continue;
+            }
+            break;
+        }
+
+        // 使用更高效的 HTML 解析
         $dom = new DOMDocument();
+        libxml_use_internal_errors(true); // 抑制 HTML 解析錯誤
         @$dom->loadHTML($html);
+        libxml_clear_errors();
         $xpath = new DOMXPath($dom);
 
-        // 收集圖片（保留原有邏輯）
-        $images = $xpath->query('//img');
-        $img_count = 0;
-        $max_images = 100;
-        foreach ($images as $img) {
-            if ($img_count >= $max_images) break;
-            $src = $img->getAttribute('src');
-            if (!empty($src)) {
-                if (strpos($src, 'http') !== 0) {
-                    $src = (($src[0] == '/') ? 'https://www.jarvis.com.tw' : 'https://www.jarvis.com.tw/') . $src;
-                }
-                $all_images[] = $src;
-                $img_count++;
+        // 強化選擇器：精確匹配 product-title 且排除重複連結
+        $product_links = $xpath->query('
+            //a[
+                contains(concat(" ", normalize-space(@class), " "), " product-title ")
+                and not(contains(@href, "blog"))
+                and not(contains(@href, "news"))
+                and not(contains(@href, "category"))
+            ]
+        ');
+
+        $current_count = $product_links->length;
+        error_log("[商品統計] 本頁找到 {$current_count} 個商品連結");
+
+        // 使用批次處理產品
+        $product_links_array = [];
+        foreach ($product_links as $link) {
+            $href = crawler_normalize_url($link->getAttribute('href'));
+            if (crawler_validate_product_url($href) && !in_array($href, $processed_urls)) {
+                $product_links_array[] = $href;
+                $processed_urls[] = $href;
             }
         }
-
-        // 只抓取具有 product-title 類別的產品連結
-        $product_urls = [];
-        $product_selectors = [
-            '//a[contains(@class, "product-title")]'
-        ];
         
-        foreach ($product_selectors as $selector) {
-            $elements = $xpath->query($selector);
-            foreach ($elements as $element) {
-                $href = $element->getAttribute('href');
-                if (!empty($href)) {
-                    if (strpos($href, 'http') !== 0) {
-                        $href = crawler_normalize_url($href);
+        // 批次處理產品頁面
+        $chunk_size = 5; // 每批處理的產品數
+        for ($i = 0; $i < count($product_links_array); $i += $chunk_size) {
+            $chunk = array_slice($product_links_array, $i, $chunk_size);
+            $chunk_results = [];
+            
+            // 並行處理（如果支援）
+            if (function_exists('pcntl_fork') && function_exists('pcntl_waitpid')) {
+                // 使用 PCNTL 進行並行處理
+                $pids = [];
+                $temp_files = [];
+                
+                foreach ($chunk as $index => $href) {
+                    $pid = pcntl_fork();
+                    if ($pid == -1) {
+                        // 無法創建子進程，回退到串行處理
+                        $product_data = crawler_process_product_page($href, $all_images);
+                        if ($product_data) {
+                            $chunk_results[] = $product_data;
+                        }
+                    } elseif ($pid == 0) {
+                        // 子進程
+                        $product_data = crawler_process_product_page($href, $all_images);
+                        $temp_file = tempnam(sys_get_temp_dir(), 'product_');
+                        file_put_contents($temp_file, serialize($product_data));
+                        exit(0);
+                    } else {
+                        // 父進程
+                        $pids[$pid] = $index;
+                        $temp_files[$index] = tempnam(sys_get_temp_dir(), 'product_');
                     }
-                    $product_urls[] = $href;
+                }
+                
+                // 等待所有子進程完成
+                foreach ($pids as $pid => $index) {
+                    pcntl_waitpid($pid, $status);
+                    if (file_exists($temp_files[$index])) {
+                        $data = unserialize(file_get_contents($temp_files[$index]));
+                        if ($data) {
+                            $chunk_results[] = $data;
+                        }
+                        unlink($temp_files[$index]);
+                    }
+                }
+            } else {
+                // 串行處理
+                foreach ($chunk as $href) {
+                    $product_data = crawler_process_product_page($href, $all_images);
+                    if ($product_data) {
+                        $chunk_results[] = $product_data;
+                    }
                 }
             }
-        }
-        $product_urls = array_unique($product_urls);
-
-        // 處理當前頁面所有產品
-        foreach ($product_urls as $product_url) {
-            $product_data = crawler_process_product_page($product_url, $all_images);
-            if ($product_data) {
+            
+            // 合併結果
+            foreach ($chunk_results as $product_data) {
                 $all_product_data[] = $product_data;
             }
         }
 
-        // 嘗試取得下一頁分頁連結（依據 CS-Cart 常見分頁樣式）
-        $next_page_element = $xpath->query('//a[contains(@class, "ty-pagination__btn--next")]')->item(0);
-        if ($next_page_element) {
-            $next_url = $next_page_element->getAttribute('href');
-            $url = crawler_normalize_url($next_url);
-            // 強制補上 items_per_page=96
-            $url = add_query_arg('items_per_page', '96', $url);
-        } else {
-            $url = null;
+        // 修正分頁條件判斷
+        $has_next = false;
+        if ($current_count > 0) {
+            // 1. 檢查分頁按鈕（支援多種 class 名稱）
+            $next_page_btn = $xpath->query('
+                //a[contains(@class, "next") or contains(@class, "ty-pagination__next")]
+            ');
+            
+            // 2. 檢查商品數量是否達標
+            $items_count = $xpath->query('//div[contains(@class, "ty-pagination")]//text()[contains(., "商品")]');
+            $items_text = $items_count->item(0)->nodeValue ?? '';
+            $has_items_range = preg_match('/\d+-\d+/u', $items_text); // 改用短破折號
+            
+            // 3. 檢查分頁容器是否存在
+            $pagination_container = $xpath->query('//div[@id="pagination_contents"]');
+            
+            // 4. 檢查隱藏分頁標記
+            $hidden_next = $xpath->query('//link[@rel="next"]');
+            
+            // 綜合判斷條件
+            $has_next = ($next_page_btn->length > 0)
+                || $has_items_range
+                || ($pagination_container->length > 0 && $current_count >= 76)
+                || ($hidden_next->length > 0);
         }
-    } while ($url);
 
+        $page++;
+        $retry_count = 0; // 重試計數重置
+    } while ($has_next && $page <= 20); // 安全上限
+
+    error_log("[分頁完成] 總共處理 " . ($page - 1) . " 個分頁");
     return $all_product_data;
 }
-
 
 // 處理產品頁面
 function crawler_process_product_page($url, &$all_images) {
     $html = crawler_fetch_html($url);
     if (!$html) return false;
 
+    // 使用更高效的 HTML 解析
     $dom = new DOMDocument();
-    @$dom->loadHTML($html);
+    libxml_use_internal_errors(true); // 抑制 HTML 解析錯誤
+    @$dom->loadHTML(mb_convert_encoding($html, 'HTML-ENTITIES', 'UTF-8'));
+    libxml_clear_errors();
     $xpath = new DOMXPath($dom);
     
-    // 定義選擇器
+    // 定義選擇器 - 使用關聯數組提高可讀性
     $selectors = [
-        'title' => ['//h1[@class="ty-mainbox-title"]', '//h1[contains(@class, "product-title")]', '//h1'],
         'note' => ['//.ty-product-feature-list__item', '//div[contains(@class, "product-features")]//li'],
         'price' => ['//.ty-price-num', '//span[contains(@class, "price")]'],
         'price_actual' => ['//.ty-price-num[@class="actual"]', '//span[contains(@class, "sale-price")]'],
@@ -287,6 +429,7 @@ function crawler_process_product_page($url, &$all_images) {
         'videolink_text' => ['//.ty-product-video iframe', '//iframe[contains(@src, "youtube")]']
     ];
     
+    // 尋找最佳選擇器
     $best_selectors = [];
     foreach ($selectors as $field => $selector_list) {
         foreach ($selector_list as $selector) {
@@ -298,100 +441,214 @@ function crawler_process_product_page($url, &$all_images) {
         }
     }
 
-    // 收集圖片
-    $images = $xpath->query('//img');
+    // 收集圖片 - 使用更高效的選擇器
+    $images = $xpath->query('//img[contains(@src, "aqara") or contains(@alt, "aqara") or contains(@src, "product")]');
     $product_images = [];
     $aqara_images = [];
     
     foreach ($images as $img) {
         $src = $img->getAttribute('src');
-        $alt = $img->getAttribute('alt');
+        $alt = strtolower($img->getAttribute('alt'));
         
         if (!empty($src)) {
-            if (strpos($src, 'http') !== 0) {
-                $src = (($src[0] == '/') ? 'https://www.jarvis.com.tw' : 'https://www.jarvis.com.tw/') . $src;
-            }
+            $src = crawler_normalize_url($src);
             
-            if (strpos($alt, 'Aqara') !== false) {
+            // 更精確地識別 Aqara 圖片
+            if (stripos($alt, 'aqara') !== false || 
+                stripos($src, 'aqara') !== false) {
                 $aqara_images[] = $src;
             }
             
             $product_images[] = $src;
-            $all_images[] = $src;
+            
+            // 避免重複添加圖片
+            if (!in_array($src, $all_images)) {
+                $all_images[] = $src;
+            }
         }
     }
 
-    // 提取產品資料
-    $product_data = [];
+    // 提取產品資料 - 使用更簡潔的方式
+    $product_data = [
+        'title' => '',
+        'note' => [],
+        'price' => '',
+        'price_actual' => '',
+        'qa_text' => [],
+        'intro_text' => [],
+        'product_image' => '',
+        'spec_image' => '',
+        'videolink_text' => '',
+        'images' => $product_images,
+        'aqara_images' => $aqara_images
+    ];
     
-    // 標題
-    if (isset($best_selectors['title'])) {
-        $product_data['title'] = crawler_get_text($xpath, $best_selectors['title']);
+    // 標題處理 - 改進標題獲取邏輯
+    $title_element = $xpath->query('//h1[contains(@class, "ty-product-block-title")]//bdi')->item(0);
+    
+    if ($title_element) {
+        // 抓取 <bdi> 內的文字
+        $product_data['title'] = trim($title_element->nodeValue);
     } else {
-        $potential_titles = [$xpath->query('//h1')->item(0), $xpath->query('//title')->item(0)];
-        foreach ($potential_titles as $title_element) {
-            if ($title_element) {
-                $product_data['title'] = trim($title_element->nodeValue);
+        // 備用方案：檢查其他可能的標題位置
+        $fallback_titles = [
+            '//h1[contains(@class, "product-title")]',
+            '//title',
+            '//meta[@property="og:title"]'
+        ];
+        
+        foreach ($fallback_titles as $selector) {
+            $element = $xpath->query($selector)->item(0);
+            if ($element) {
+                $product_data['title'] = trim($element->nodeValue);
                 break;
             }
         }
-        if (empty($product_data['title'])) $product_data['title'] = basename($url);
+        
+        // 終極備用方案：從 URL 解析
+        if (empty($product_data['title'])) {
+            $path = parse_url($url, PHP_URL_PATH);
+            $product_data['title'] = urldecode(
+                str_replace(
+                    ['-', '_', '+'],
+                    ' ',
+                    pathinfo($path, PATHINFO_FILENAME)
+                )
+            );
+        }
+    }
+
+    // 清理標題
+    $product_data['title'] = preg_replace([
+        '/\|.*$/',              // 移除 | 之後的內容
+        '/\s*-\s*Jarvis.*$/',   // 移除 - Jarvis 後綴 
+        '/【.*】/',             // 移除【】內內容
+        '/<.*?>/'               // 移除 HTML 標籤
+    ], '', $product_data['title']);
+
+    // 日誌記錄
+    error_log("[Title Debug] URL: $url | Title: " . $product_data['title']);
+    
+    // 填充其他欄位
+    foreach (['note', 'qa_text', 'intro_text'] as $text_field) {
+        if (isset($best_selectors[$text_field])) {
+            $product_data[$text_field] = crawler_get_texts($xpath, $best_selectors[$text_field]);
+        }
     }
     
-    $product_data['note'] = isset($best_selectors['note']) ? crawler_get_texts($xpath, $best_selectors['note']) : [];
-    $product_data['price'] = isset($best_selectors['price']) ? crawler_get_text($xpath, $best_selectors['price']) : '';
-    $product_data['price_actual'] = isset($best_selectors['price_actual']) ? crawler_get_text($xpath, $best_selectors['price_actual']) : $product_data['price'];
-    $product_data['qa_text'] = isset($best_selectors['qa_text']) ? crawler_get_texts($xpath, $best_selectors['qa_text']) : [];
-    $product_data['intro_text'] = isset($best_selectors['intro_text']) ? crawler_get_texts($xpath, $best_selectors['intro_text']) : [];
-    $product_data['product_image'] = isset($best_selectors['product_image']) ? crawler_get_attribute($xpath, $best_selectors['product_image'], 'src') : '';
-    $product_data['spec_image'] = isset($best_selectors['spec_image']) ? crawler_get_attribute($xpath, $best_selectors['spec_image'], 'src') : '';
-    $product_data['videolink_text'] = isset($best_selectors['videolink_text']) ? crawler_get_attribute($xpath, $best_selectors['videolink_text'], 'src') : '';
-    $product_data['images'] = $product_images;
-    $product_data['aqara_images'] = $aqara_images;
+    foreach (['price', 'price_actual'] as $price_field) {
+        if (isset($best_selectors[$price_field])) {
+            $product_data[$price_field] = crawler_get_text($xpath, $best_selectors[$price_field]);
+        }
+    }
+    
+    // 如果沒有特價，使用原價
+    if (empty($product_data['price_actual'])) {
+        $product_data['price_actual'] = $product_data['price'];
+    }
+    
+    foreach (['product_image', 'spec_image', 'videolink_text'] as $attr_field) {
+        if (isset($best_selectors[$attr_field])) {
+            $product_data[$attr_field] = crawler_get_attribute($xpath, $best_selectors[$attr_field], 'src');
+        }
+    }
 
     return $product_data;
 }
 
-// 獲取 HTML 內容
+// 獲取 HTML 內容 - 改進錯誤處理和效能
 function crawler_fetch_html($url) {
-    if (!function_exists('curl_init')) {
-        $opts = ['http' => ['method' => 'GET', 'header' => 'User-Agent: Mozilla/5.0', 'timeout' => 15]];
-        $context = stream_context_create($opts);
-        return @file_get_contents($url, false, $context);
-    }
-
-    $ch = curl_init($url);
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_FOLLOWLOCATION => true,
-        CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        CURLOPT_TIMEOUT => 15,
-        CURLOPT_CONNECTTIMEOUT => 5,
-        CURLOPT_SSL_VERIFYPEER => false
-    ]);
-    $html = curl_exec($ch);
+    static $cache = []; // 靜態快取
     
-    if (curl_errno($ch)) {
-        curl_close($ch);
-        return false;
+    // 檢查快取
+    if (isset($cache[$url])) {
+        return $cache[$url];
     }
     
-    $status_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
+    // 添加重試機制
+    $max_retries = 3;
+    $retry_count = 0;
     
-    return ($status_code < 400) ? $html : false;
+    while ($retry_count < $max_retries) {
+        if (!function_exists('curl_init')) {
+            $opts = [
+                'http' => [
+                    'method' => 'GET',
+                    'header' => 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'timeout' => 15
+                ]
+            ];
+            $context = stream_context_create($opts);
+            $html = @file_get_contents($url, false, $context);
+            
+            if ($html !== false) {
+                // 儲存到快取
+                $cache[$url] = $html;
+                
+                // 限制快取大小
+                if (count($cache) > 100) {
+                    array_shift($cache); // 移除最舊的項目
+                }
+                
+                return $html;
+            }
+        } else {
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                CURLOPT_TIMEOUT => 15,
+                CURLOPT_CONNECTTIMEOUT => 5,
+                CURLOPT_SSL_VERIFYPEER => false,
+                CURLOPT_ENCODING => '', // 自動處理壓縮內容
+                CURLOPT_TCP_FASTOPEN => 1, // 啟用 TCP Fast Open (如果支援)
+                CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_2_0, // 嘗試使用 HTTP/2
+            ]);
+            $html = curl_exec($ch);
+            
+            $status_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curl_error = curl_errno($ch);
+            curl_close($ch);
+            
+            if (!$curl_error && $status_code < 400) {
+                // 儲存到快取
+                $cache[$url] = $html;
+                
+                // 限制快取大小
+                if (count($cache) > 100) {
+                    array_shift($cache); // 移除最舊的項目
+                }
+                
+                return $html;
+            }
+        }
+        
+        // 重試前等待
+        $retry_count++;
+        if ($retry_count < $max_retries) {
+            usleep(500000); // 等待0.5秒後重試
+        }
+    }
+    
+    return false;
 }
 
-// 輔助函數
+// 輔助函數 - 優化文本處理
 function crawler_get_text($xpath, $query) {
     $element = $xpath->query($query)->item(0);
-    return $element ? trim($element->nodeValue) : '';
+    return $element ? preg_replace('/\s+/', ' ', trim($element->nodeValue)) : '';
 }
 
 function crawler_get_texts($xpath, $query) {
     $elements = $xpath->query($query);
     $texts = [];
-    foreach ($elements as $element) $texts[] = trim($element->nodeValue);
+    foreach ($elements as $element) {
+        $text = preg_replace('/\s+/', ' ', trim($element->nodeValue));
+        if (!empty($text)) {
+            $texts[] = $text;
+        }
+    }
     return $texts;
 }
 
@@ -426,9 +683,9 @@ function crawler_admin_page() {
                 <p><strong>注意事項：</strong></p>
                 <ul style="list-style-type: disc; margin-left: 20px;">
                     <li>爬蟲過程可能需要較長時間，請耐心等待。</li>
-                    <li>每個分類頁面最多處理 20 個產品，以避免超時錯誤。</li>
+                    <li>爬蟲會處理所有找到的產品，每頁最多顯示 96 個產品。</li>
                     <li>分類連結將保存在 output/category_urls.txt 文件中。</li>
-                    <li>如果處理時間過長，爬蟲會自動中斷並下載已爬取的部分數據。</li>
+                    <li>如果處理時間超過 4 分鐘，爬蟲會自動中斷並下載已爬取的部分數據。</li>
                 </ul>
             </div>
             
@@ -490,91 +747,127 @@ add_action('admin_post_run_crawler', 'crawler_handle_post');
 // WP-CLI 命令（同樣採用緩衝批次寫入方式）
 if (defined('WP_CLI') && WP_CLI) {
     WP_CLI::add_command('smartsync crawl', function() {
-        if (!defined('ABSPATH')) {
-            WP_CLI::error('必須在 WordPress 安裝目錄中執行此命令');
-            return;
-        }
-        
-        $main_url = 'https://www.jarvis.com.tw/aqara智能居家/';
-        $category_urls = crawler_get_category_urls($main_url);
-        $all_product_data = [];
-        $all_images = [];
-        
-        foreach ($category_urls as $category_url) {
-            WP_CLI::log('正在處理分類：' . $category_url);
-            $category_product_data = crawler_process_page($category_url, $all_images);
-            if (is_array($category_product_data)) {
-                $all_product_data = array_merge($all_product_data, $category_product_data);
+        try {
+            if (!defined('ABSPATH')) {
+                WP_CLI::error('必須在 WordPress 安裝目錄中執行此命令');
+                return;
             }
-        }
-        
-        if (empty($all_product_data)) {
-            WP_CLI::error('爬蟲執行失敗');
-            return;
-        }
-        
-        update_option('crawler_last_results', $all_product_data);
-        update_option('crawler_last_images', $all_images);
-        update_option('crawler_last_run', current_time('mysql'));
-        
-        $filename = 'jarvis_products_' . date('Y-m-d_H-i-s') . '.csv';
-        $file_path = WP_CONTENT_DIR . '/' . $filename;
-        
-        $output = fopen($file_path, 'w');
-        fputs($output, "\xEF\xBB\xBF"); // UTF-8 BOM
-        fputcsv($output, ['名稱', '簡短內容說明', '原價', '特價', '描述', '圖片', '購買備註', '外部網址']);
-        
-        // 使用緩衝區批次寫入 CSV（例如每 50 筆為一批）
-        $batch_size = 50;
-        $buffer = [];
-        foreach ($all_product_data as $row) {
-            $notes = is_array($row['note']) ? implode('; ', $row['note']) : $row['note'];
-            $description = (is_array($row['qa_text']) ? implode('; ', $row['qa_text']) : $row['qa_text']) . '; ' . 
-                           (is_array($row['intro_text']) ? implode('; ', $row['intro_text']) : $row['intro_text']);
-            $all_img = isset($row['images']) && is_array($row['images']) ? implode('; ', $row['images']) : '';
-            $aqara_img = isset($row['aqara_images']) && is_array($row['aqara_images']) ? implode('; ', $row['aqara_images']) : '';
-            $images = !empty($aqara_img) ? $aqara_img : $all_img;
             
-            $buffer[] = [
-                $row['title'],
-                $notes,
-                $row['price'],
-                $row['price_actual'],
-                $description,
-                $images,
-                $row['spec_image'],
-                $row['videolink_text']
-            ];
+            $main_url = 'https://www.jarvis.com.tw/aqara智能居家/';
+            $category_urls = crawler_get_category_urls($main_url);
+            $all_product_data = [];
+            $all_images = [];
             
-            if (count($buffer) >= $batch_size) {
-                foreach ($buffer as $csv_row) {
-                    fputcsv($output, $csv_row);
+            foreach ($category_urls as $category_url) {
+                WP_CLI::log('正在處理分類：' . $category_url);
+                $category_product_data = crawler_process_page($category_url, $all_images);
+                if (is_array($category_product_data)) {
+                    $all_product_data = array_merge($all_product_data, $category_product_data);
                 }
-                fflush($output);
+            }
+            
+            if (empty($all_product_data)) {
+                WP_CLI::error('爬蟲執行失敗');
+                return;
+            }
+            
+            update_option('crawler_last_results', $all_product_data);
+            update_option('crawler_last_images', $all_images);
+            update_option('crawler_last_run', current_time('mysql'));
+            
+            $filename = 'jarvis_products_' . date('Y-m-d_H-i-s') . '.csv';
+            $file_path = WP_CONTENT_DIR . '/' . $filename;
+            
+            $output = null;
+            try {
+                $output = fopen($file_path, 'w');
+                if ($output === false) {
+                    throw new Exception("無法建立 CSV 檔案：$file_path");
+                }
+                
+                fputs($output, "\xEF\xBB\xBF"); // UTF-8 BOM
+                fputcsv($output, ['名稱', '簡短內容說明', '原價', '特價', '描述', '圖片', '購買備註', '外部網址']);
+                
+                // 使用緩衝區批次寫入 CSV
+                $batch_size = 50;
                 $buffer = [];
+                foreach ($all_product_data as $row) {
+                    $notes = is_array($row['note']) ? implode('; ', $row['note']) : $row['note'];
+                    $description = (is_array($row['qa_text']) ? implode('; ', $row['qa_text']) : $row['qa_text']) . '; ' . 
+                                 (is_array($row['intro_text']) ? implode('; ', $row['intro_text']) : $row['intro_text']);
+                    $all_img = isset($row['images']) && is_array($row['images']) ? implode('; ', $row['images']) : '';
+                    $aqara_img = isset($row['aqara_images']) && is_array($row['aqara_images']) ? implode('; ', $row['aqara_images']) : '';
+                    $images = !empty($aqara_img) ? $aqara_img : $all_img;
+                    
+                    $buffer[] = [
+                        $row['title'],
+                        $notes,
+                        $row['price'],
+                        $row['price_actual'],
+                        $description,
+                        $images,
+                        $row['spec_image'],
+                        $row['videolink_text']
+                    ];
+                    
+                    if (count($buffer) >= $batch_size) {
+                        foreach ($buffer as $csv_row) {
+                            if (fputcsv($output, $csv_row) === false) {
+                                throw new Exception('寫入 CSV 時發生錯誤');
+                            }
+                        }
+                        if (fflush($output) === false) {
+                            throw new Exception('清空緩衝區時發生錯誤');
+                        }
+                        $buffer = [];
+                    }
+                }
+                
+                // 寫入剩餘的資料
+                if (!empty($buffer)) {
+                    foreach ($buffer as $csv_row) {
+                        if (fputcsv($output, $csv_row) === false) {
+                            throw new Exception('寫入最後的 CSV 資料時發生錯誤');
+                        }
+                    }
+                }
+                
+                WP_CLI::success('爬蟲已完成運行！共爬取 ' . count($all_product_data) . ' 筆資料，收集 ' . count($all_images) . ' 張圖片。CSV 文件已保存到：' . $file_path);
+            } finally {
+                if ($output !== null) {
+                    fclose($output);
+                }
             }
+        } catch (Exception $e) {
+            WP_CLI::error('執行過程中發生錯誤：' . $e->getMessage());
         }
-        // 寫入剩餘的資料
-        if (!empty($buffer)) {
-            foreach ($buffer as $csv_row) {
-                fputcsv($output, $csv_row);
-            }
-        }
-        fclose($output);
-        
-        WP_CLI::success('爬蟲已完成運行！共爬取 ' . count($all_product_data) . ' 筆資料，收集 ' . count($all_images) . ' 張圖片。CSV 文件已保存到：' . $file_path);
     });
 }
 
 // 新增共用函數
 function crawler_normalize_url($url) {
+    static $cache = [];
+    
+    if (isset($cache[$url])) {
+        return $cache[$url];
+    }
+    
+    $result = $url;
     if (filter_var($url, FILTER_VALIDATE_URL)) {
-        return $url;
+        $result = $url;
+    } else if (strpos($url, 'http') !== 0 && !empty($url) && $url != '#') {
+        $result = (($url[0] == '/') ? 'https://www.jarvis.com.tw' : 'https://www.jarvis.com.tw/') . $url;
     }
-    if (strpos($url, 'http') !== 0 && !empty($url) && $url != '#') {
-        return (($url[0] == '/') ? 'https://www.jarvis.com.tw' : 'https://www.jarvis.com.tw/') . $url;
+    
+    // 儲存到快取
+    $cache[$url] = $result;
+    
+    // 限制快取大小
+    if (count($cache) > 1000) {
+        array_shift($cache); // 移除最舊的項目
     }
-    return $url;
+    
+    return $result;
 }
 
 function crawler_download_file($file_path, $mime_type = 'text/plain') {
@@ -668,4 +961,41 @@ function crawler_get_categories_only() {
     }
 }
 add_action('admin_post_get_categories_only', 'crawler_get_categories_only');
+
+/* 新增 URL 過濾函數 */
+function crawler_validate_product_url($url) {
+    $path = parse_url($url, PHP_URL_PATH);
+    
+    // 排除非產品路徑
+    $exclude_patterns = [
+        '/category/',
+        '/brand/',
+        '/blog/',
+        '/news/',
+        '/page/',
+        '/tag/'
+    ];
+    
+    foreach ($exclude_patterns as $pattern) {
+        if (preg_match($pattern, $path)) {
+            return false;
+        }
+    }
+
+    // 必須包含產品特徵
+    $include_patterns = [
+        '/product/',
+        '/-\d+\.html$/',
+        '/_p\d+$/',
+        '/item/'
+    ];
+    
+    foreach ($include_patterns as $pattern) {
+        if (preg_match($pattern, $path)) {
+            return true;
+        }
+    }
+    
+    return false;
+}
 ?>
