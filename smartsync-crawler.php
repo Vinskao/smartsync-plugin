@@ -225,45 +225,37 @@ function crawler_get_product_articles($url) {
     return implode('++', $content);
 }
 
-// 獲取產品注意事項
+// 獲取產品注意事項與 QA（修改版 - 防止數據重複）
 function crawler_get_product_notes($url) {
     $html = crawler_fetch_html($url);
     if (!$html) return '';
 
     $dom = new DOMDocument();
-    libxml_use_internal_errors(true); // 抑制HTML解析警告
+    libxml_use_internal_errors(true);
     $dom->loadHTML($html);
     libxml_clear_errors();
     
     $xpath = new DOMXPath($dom);
-    // 定位包含 "產品注意事項" 的 div
     $notes_div = $xpath->query('//div[contains(., "產品注意事項")]');
 
     if ($notes_div->length === 0) {
         return '';
     }
 
-    $content = [];
-    // 抓取所有 <p> 和 <span> 的文字內容
-    $paragraphs = $xpath->query('.//p', $notes_div->item(0));
-    $spans = $xpath->query('.//span', $notes_div->item(0));
+    // 使用關聯數組避免重複內容
+    $unique_content = [];
+    $paragraphs = $xpath->query('.//p | .//span', $notes_div->item(0));
 
-    foreach ($paragraphs as $p) {
-        $text = trim($p->nodeValue);
+    foreach ($paragraphs as $node) {
+        $text = trim($node->nodeValue);
         if (!empty($text)) {
-            $content[] = $text;
+            // 使用內容作為鍵確保唯一性
+            $unique_content[$text] = $text;
         }
     }
 
-    foreach ($spans as $span) {
-        $text = trim($span->nodeValue);
-        if (!empty($text)) {
-            $content[] = $text;
-        }
-    }
-
-    // 用 "++" 分隔所有段落和 span 的文字內容
-    return implode('++', $content);
+    // 轉換為陣列並合併
+    return implode('++', array_values($unique_content));
 }
 
 // 處理 CSV 下載 (修正版)
@@ -358,7 +350,7 @@ function crawler_download_product_urls() {
 }
 add_action('admin_post_download_product_urls', 'crawler_download_product_urls');
 
-// 處理第二個 CSV 下載 (僅包含 URL 和 Notes)
+// 處理注意事項 CSV 下載（修改版 - 防止數據重複）
 function crawler_download_product_notes() {
     if (!isset($_POST['crawler_nonce']) || !wp_verify_nonce($_POST['crawler_nonce'], 'run_crawler_nonce')) {
         wp_die('安全檢查失敗', 403);
@@ -382,10 +374,11 @@ function crawler_download_product_notes() {
             throw new Exception('未找到任何產品連結');
         }
 
-        // 獲取所有產品 URL 和注意事項
-        $product_notes = [];
+        // 獲取所有產品 URL 和注意事項內容
+        $product_notes_data = [];
         foreach ($product_urls as $url) {
-            $product_notes[] = crawler_get_product_notes($url);
+            $raw_content = crawler_get_product_notes($url);
+            $product_notes_data[] = $raw_content;
         }
 
         // 寫入CSV文件（確保UTF-8編碼）
@@ -399,13 +392,61 @@ function crawler_download_product_notes() {
         fwrite($file_handle, "\xEF\xBB\xBF");
         
         // 寫入表頭
-        fputcsv($file_handle, ['URL', 'Notes']);
+        fputcsv($file_handle, ['URL', '產品注意事項', '產品QA']);
         
-        // 寫入數據
+        // 數據處理邏輯 - 數據去重
         foreach ($product_urls as $index => $url) {
+            $content = $product_notes_data[$index];
+            $notes = '';
+            $qa = '';
+
+            // 處理內容分割
+            $first_notes_pos = mb_strpos($content, '產品注意事項', 0, 'UTF-8');
+            $first_qa_pos = mb_strpos($content, '產品QA', 0, 'UTF-8');
+
+            if ($first_notes_pos !== false) {
+                $notes_end_pos = ($first_qa_pos !== false) ? $first_qa_pos : null;
+                $notes = ($notes_end_pos !== null) 
+                    ? mb_substr($content, $first_notes_pos, $notes_end_pos - $first_notes_pos, 'UTF-8')
+                    : mb_substr($content, $first_notes_pos, null, 'UTF-8');
+            }
+
+            if ($first_qa_pos !== false) {
+                $qa = mb_substr($content, $first_qa_pos, null, 'UTF-8');
+            }
+
+            // 去重邏輯處理
+            if (!empty($notes) && !empty($qa)) {
+                // 將內容拆分為數組
+                $notes_array = explode('++', $notes);
+                $qa_array = explode('++', $qa);
+                
+                // 使用關聯數組去重
+                $unique_notes = [];
+                foreach ($notes_array as $note) {
+                    $trimmed = trim($note);
+                    if (!empty($trimmed)) {
+                        $unique_notes[$trimmed] = $trimmed;
+                    }
+                }
+                
+                $unique_qa = [];
+                foreach ($qa_array as $q) {
+                    $trimmed = trim($q);
+                    if (!empty($trimmed)) {
+                        $unique_qa[$trimmed] = $trimmed;
+                    }
+                }
+                
+                // 重新合併為字符串
+                $notes = implode("\n", array_values($unique_notes));
+                $qa = implode("\n", array_values($unique_qa));
+            }
+
             fputcsv($file_handle, [
-                $url, 
-                $product_notes[$index]
+                $url,
+                $notes,
+                $qa
             ]);
         }
 
