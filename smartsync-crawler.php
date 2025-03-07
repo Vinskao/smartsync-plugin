@@ -221,8 +221,8 @@ function crawler_get_product_articles($url) {
         }
     }
 
-    // 用 "++" 分隔所有段落和 span 的文字內容
-    return implode('++', $content);
+    // 用換行符分隔所有段落和 span 的文字內容
+    return implode("\n", $content);
 }
 
 // 獲取產品注意事項與 QA（修改版 - 防止數據重複）
@@ -254,11 +254,36 @@ function crawler_get_product_notes($url) {
         }
     }
 
-    // 轉換為陣列並合併
-    return implode('++', array_values($unique_content));
+    // 轉換為陣列並合併，使用換行符號
+    return implode("\n", array_values($unique_content));
 }
 
-// 處理 CSV 下載 (修正版)
+// 獲取產品原價
+function crawler_get_original_price($url) {
+    $html = crawler_fetch_html($url);
+    if (!$html) return '';
+
+    $dom = new DOMDocument();
+    libxml_use_internal_errors(true); // 抑制HTML解析警告
+    $dom->loadHTML($html);
+    libxml_clear_errors();
+    
+    $xpath = new DOMXPath($dom);
+    $price_spans = $xpath->query('//span[@class="ty-strike"]');
+
+    if ($price_spans->length === 0) {
+        return '';
+    }
+
+    // 獲取第一個匹配的原價
+    $price_text = trim($price_spans->item(0)->nodeValue);
+    // 清理價格文本，只保留數字和逗號
+    $price_text = preg_replace('/[^0-9,]/', '', $price_text);
+    
+    return $price_text;
+}
+
+// 處理 CSV 下載 (修改版 - 移除筆數限制，1-based索引)
 function crawler_download_product_urls() {
     if (!isset($_POST['crawler_nonce']) || !wp_verify_nonce($_POST['crawler_nonce'], 'run_crawler_nonce')) {
         wp_die('安全檢查失敗', 403);
@@ -269,6 +294,15 @@ function crawler_download_product_urls() {
     }
 
     try {
+        // 獲取爬蟲範圍 (1-based轉為0-based)
+        $start_index = isset($_POST['start_index']) ? (intval($_POST['start_index']) - 1) : 0;
+        $end_index = isset($_POST['end_index']) ? (intval($_POST['end_index']) - 1) : 19;
+        
+        // 確保區間合理
+        if ($start_index < 0) $start_index = 0;
+        if ($end_index < $start_index) $end_index = $start_index;
+        // 移除 20 筆的限制
+        
         $output_dir = __DIR__ . '/output';
         if (!wp_mkdir_p($output_dir)) {
             throw new Exception('無法建立輸出目錄');
@@ -277,12 +311,23 @@ function crawler_download_product_urls() {
         // 強制使用96每頁的URL
         $main_url = 'https://www.jarvis.com.tw/aqara%E6%99%BA%E8%83%BD%E5%B1%85%E5%AE%B6/?items_per_page=96';
         
-        $product_urls = crawler_get_product_urls($main_url);
-        if (empty($product_urls)) {
+        $all_product_urls = crawler_get_product_urls($main_url);
+        if (empty($all_product_urls)) {
             throw new Exception('未找到任何產品連結');
         }
-
-        // 獲取所有產品名稱、簡短描述、實際價格、描述、圖片、影片和文章內容
+        
+        // 根據範圍篩選URL
+        $total_urls = count($all_product_urls);
+        if ($start_index >= $total_urls) {
+            throw new Exception('起始索引超出URL總數範圍');
+        }
+        if ($end_index >= $total_urls) {
+            $end_index = $total_urls - 1;
+        }
+        
+        $product_urls = array_slice($all_product_urls, $start_index, ($end_index - $start_index + 1));
+        
+        // 獲取所有產品數據
         $product_names = [];
         $product_short_descriptions = [];
         $product_actual_prices = [];
@@ -290,6 +335,10 @@ function crawler_download_product_urls() {
         $product_images = [];
         $product_videos = [];
         $product_articles = [];
+        $product_notes_data = [];
+        $product_qa_data = [];
+        $product_original_prices = [];
+        
         foreach ($product_urls as $url) {
             $product_names[] = crawler_get_product_name($url);
             $product_short_descriptions[] = crawler_get_product_short_description($url);
@@ -298,10 +347,72 @@ function crawler_download_product_urls() {
             $product_images[] = crawler_get_product_images($url);
             $product_videos[] = crawler_get_product_video($url);
             $product_articles[] = crawler_get_product_articles($url);
+            
+            // 獲取第二個CSV中的數據
+            $raw_notes = crawler_get_product_notes($url);
+            
+            // 處理注意事項和QA數據
+            $notes = '';
+            $qa = '';
+            
+            // 處理內容分割
+            $first_notes_pos = mb_strpos($raw_notes, '產品注意事項', 0, 'UTF-8');
+            $first_qa_pos = mb_strpos($raw_notes, '產品QA', 0, 'UTF-8');
+
+            if ($first_notes_pos !== false) {
+                $notes_end_pos = ($first_qa_pos !== false) ? $first_qa_pos : null;
+                $notes = ($notes_end_pos !== null) 
+                    ? mb_substr($raw_notes, $first_notes_pos, $notes_end_pos - $first_notes_pos, 'UTF-8')
+                    : mb_substr($raw_notes, $first_notes_pos, null, 'UTF-8');
+            }
+
+            if ($first_qa_pos !== false) {
+                $qa = mb_substr($raw_notes, $first_qa_pos, null, 'UTF-8');
+            }
+
+            // 檢查是否包含"因改良而有變更時"，如果有則截斷
+            $cutoff_pos = mb_strpos($notes, '因改良而有變更時', 0, 'UTF-8');
+            if ($cutoff_pos !== false) {
+                $notes = mb_substr($notes, 0, $cutoff_pos, 'UTF-8');
+            }
+
+            $cutoff_pos = mb_strpos($qa, '因改良而有變更時', 0, 'UTF-8');
+            if ($cutoff_pos !== false) {
+                $qa = mb_substr($qa, 0, $cutoff_pos, 'UTF-8');
+            }
+            
+            // 去重處理
+            if (!empty($notes)) {
+                $notes_array = explode("\n", $notes);
+                $unique_notes = [];
+                foreach ($notes_array as $note) {
+                    $trimmed = trim($note);
+                    if (!empty($trimmed)) {
+                        $unique_notes[$trimmed] = $trimmed;
+                    }
+                }
+                $notes = implode("\n", array_values($unique_notes));
+            }
+            
+            if (!empty($qa)) {
+                $qa_array = explode("\n", $qa);
+                $unique_qa = [];
+                foreach ($qa_array as $q) {
+                    $trimmed = trim($q);
+                    if (!empty($trimmed)) {
+                        $unique_qa[$trimmed] = $trimmed;
+                    }
+                }
+                $qa = implode("\n", array_values($unique_qa));
+            }
+            
+            $product_notes_data[] = $notes;
+            $product_qa_data[] = $qa;
+            $product_original_prices[] = crawler_get_original_price($url);
         }
 
         // 寫入CSV文件（確保UTF-8編碼）
-        $csv_file = "$output_dir/product_urls.csv";
+        $csv_file = "$output_dir/product_data.csv";
         $file_handle = fopen($csv_file, 'w');
         if (!$file_handle) {
             throw new Exception('無法建立CSV文件');
@@ -310,8 +421,11 @@ function crawler_download_product_urls() {
         // 寫入UTF-8 BOM，確保Excel等軟件正確識別編碼
         fwrite($file_handle, "\xEF\xBB\xBF");
         
-        // 寫入表頭（修改欄位名稱）
-        fputcsv($file_handle, ['URL', 'Name', 'Short Description', 'ActualPrice', 'Description', 'Images', 'Video', 'Articles']);
+        // 寫入表頭（合併兩個CSV的欄位）
+        fputcsv($file_handle, [
+            'URL', 'Name', 'Short Description', 'ActualPrice', 'Description', 'Images', 'Video', 'Articles',
+            '產品注意事項', '產品QA', '原價'
+        ]);
         
         // 寫入數據
         foreach ($product_urls as $index => $url) {
@@ -323,7 +437,10 @@ function crawler_download_product_urls() {
                 $product_descriptions[$index], 
                 $product_images[$index], 
                 $product_videos[$index],
-                $product_articles[$index]
+                $product_articles[$index],
+                $product_notes_data[$index],
+                $product_qa_data[$index],
+                $product_original_prices[$index]
             ]);
         }
 
@@ -331,7 +448,7 @@ function crawler_download_product_urls() {
 
         // 直接輸出文件
         header('Content-Type: text/csv; charset=UTF-8');
-        header('Content-Disposition: attachment; filename="product_urls.csv"');
+        header('Content-Disposition: attachment; filename="product_data.csv"');
         readfile($csv_file);
         exit;
 
@@ -350,152 +467,56 @@ function crawler_download_product_urls() {
 }
 add_action('admin_post_download_product_urls', 'crawler_download_product_urls');
 
-// 處理注意事項 CSV 下載（修改版 - 防止數據重複）
-function crawler_download_product_notes() {
-    if (!isset($_POST['crawler_nonce']) || !wp_verify_nonce($_POST['crawler_nonce'], 'run_crawler_nonce')) {
-        wp_die('安全檢查失敗', 403);
-    }
-
-    if (!current_user_can('manage_options')) {
-        wp_die('權限不足', 403);
-    }
-
+// 管理頁面
+function crawler_admin_page() {
+    // 獲取所有產品 URL 來計算總數
+    $main_url = 'https://www.jarvis.com.tw/aqara%E6%99%BA%E8%83%BD%E5%B1%85%E5%AE%B6/?items_per_page=96';
+    $all_product_urls = [];
+    
     try {
-        $output_dir = __DIR__ . '/output';
-        if (!wp_mkdir_p($output_dir)) {
-            throw new Exception('無法建立輸出目錄');
-        }
-
-        // 強制使用96每頁的URL
-        $main_url = 'https://www.jarvis.com.tw/aqara%E6%99%BA%E8%83%BD%E5%B1%85%E5%AE%B6/?items_per_page=96';
-        
-        $product_urls = crawler_get_product_urls($main_url);
-        if (empty($product_urls)) {
-            throw new Exception('未找到任何產品連結');
-        }
-
-        // 獲取所有產品 URL 和注意事項內容
-        $product_notes_data = [];
-        foreach ($product_urls as $url) {
-            $raw_content = crawler_get_product_notes($url);
-            $product_notes_data[] = $raw_content;
-        }
-
-        // 寫入CSV文件（確保UTF-8編碼）
-        $csv_file = "$output_dir/product_notes.csv";
-        $file_handle = fopen($csv_file, 'w');
-        if (!$file_handle) {
-            throw new Exception('無法建立CSV文件');
-        }
-        
-        // 寫入UTF-8 BOM，確保Excel等軟件正確識別編碼
-        fwrite($file_handle, "\xEF\xBB\xBF");
-        
-        // 寫入表頭
-        fputcsv($file_handle, ['URL', '產品注意事項', '產品QA']);
-        
-        // 數據處理邏輯 - 數據去重
-        foreach ($product_urls as $index => $url) {
-            $content = $product_notes_data[$index];
-            $notes = '';
-            $qa = '';
-
-            // 處理內容分割
-            $first_notes_pos = mb_strpos($content, '產品注意事項', 0, 'UTF-8');
-            $first_qa_pos = mb_strpos($content, '產品QA', 0, 'UTF-8');
-
-            if ($first_notes_pos !== false) {
-                $notes_end_pos = ($first_qa_pos !== false) ? $first_qa_pos : null;
-                $notes = ($notes_end_pos !== null) 
-                    ? mb_substr($content, $first_notes_pos, $notes_end_pos - $first_notes_pos, 'UTF-8')
-                    : mb_substr($content, $first_notes_pos, null, 'UTF-8');
-            }
-
-            if ($first_qa_pos !== false) {
-                $qa = mb_substr($content, $first_qa_pos, null, 'UTF-8');
-            }
-
-            // 去重邏輯處理
-            if (!empty($notes) && !empty($qa)) {
-                // 將內容拆分為數組
-                $notes_array = explode('++', $notes);
-                $qa_array = explode('++', $qa);
-                
-                // 使用關聯數組去重
-                $unique_notes = [];
-                foreach ($notes_array as $note) {
-                    $trimmed = trim($note);
-                    if (!empty($trimmed)) {
-                        $unique_notes[$trimmed] = $trimmed;
-                    }
-                }
-                
-                $unique_qa = [];
-                foreach ($qa_array as $q) {
-                    $trimmed = trim($q);
-                    if (!empty($trimmed)) {
-                        $unique_qa[$trimmed] = $trimmed;
-                    }
-                }
-                
-                // 重新合併為字符串
-                $notes = implode("\n", array_values($unique_notes));
-                $qa = implode("\n", array_values($unique_qa));
-            }
-
-            fputcsv($file_handle, [
-                $url,
-                $notes,
-                $qa
-            ]);
-        }
-
-        fclose($file_handle);
-
-        // 直接輸出文件
-        header('Content-Type: text/csv; charset=UTF-8');
-        header('Content-Disposition: attachment; filename="product_notes.csv"');
-        readfile($csv_file);
-        exit;
-
+        $all_product_urls = crawler_get_product_urls($main_url);
     } catch (Exception $e) {
-        // 錯誤處理
         add_settings_error(
             'crawler_error',
             'crawler-error',
-            '操作失敗: ' . $e->getMessage(),
+            '獲取產品URL失敗: ' . $e->getMessage(),
             'error'
         );
-        set_transient('settings_errors', get_settings_errors(), 30);
-        wp_redirect(admin_url('admin.php?page=smart_crawler'));
-        exit;
     }
-}
-add_action('admin_post_download_product_notes', 'crawler_download_product_notes');
-
-// 管理頁面
-function crawler_admin_page() {
+    
+    $total_urls = count($all_product_urls);
     ?>
     <div class="wrap">
         <h1>SmartSync Crawler</h1>
         <?php settings_errors('crawler_error'); ?>
         
-        <p><strong>注意：</strong>此操作大約會等待 10-20 分鐘，請耐心等待，期間請勿進行任何操作，建議點擊兩次按鈕確保有觸發爬蟲。如果瀏覽器停止運轉，就再按一下按鈕，<strong>包含除了產品注意事項以及產品QA以外的所有內容</strong>
+        <p><strong>注意：</strong>操作筆數越多等待時間越長，請耐心等待，期間請勿進行任何操作，建議點擊兩次按鈕確保有觸發爬蟲。如果瀏覽器停止運轉，就再按一下按鈕，建議視伺服器效能適量調整爬取資料量，20筆約10分鐘</p>
+        
+        <h3>目前可爬取的產品總數：<?php echo $total_urls; ?> 筆</h3>
         
         <form method="post" action="<?php echo admin_url('admin-post.php'); ?>">
             <input type="hidden" name="action" value="download_product_urls">
             <?php wp_nonce_field('run_crawler_nonce', 'crawler_nonce'); ?>
+            
+            <table class="form-table">
+                <tr>
+                    <th scope="row"><label for="start_index">從第幾筆開始：</label></th>
+                    <td>
+                        <input type="number" name="start_index" id="start_index" min="1" value="1" class="regular-text">
+                        <p class="description">起始索引 (從1開始計算)</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row"><label for="end_index">到第幾筆結束：</label></th>
+                    <td>
+                        <input type="number" name="end_index" id="end_index" min="1" value="20" class="regular-text">
+                        <p class="description">結束索引 (最大值：<?php echo $total_urls; ?>)</p>
+                    </td>
+                </tr>
+            </table>
+            
             <p class="submit">
-                <input type="submit" class="button button-primary" value="下載產品 URL CSV">
-            </p>
-        </form>
-
-        <p><strong>注意：</strong>此 CSV 文件開啟時可能會非常慢，建議使用CPU/記憶體優的電腦開啟。<strong>包含產品注意事項以及產品QA內容</strong></p>
-        <form method="post" action="<?php echo admin_url('admin-post.php'); ?>">
-            <input type="hidden" name="action" value="download_product_notes">
-            <?php wp_nonce_field('run_crawler_nonce', 'crawler_nonce'); ?>
-            <p class="submit">
-                <input type="submit" class="button button-primary" value="下載產品注意事項 CSV">
+                <input type="submit" class="button button-primary" value="下載產品資料 CSV">
             </p>
         </form>
     </div>
