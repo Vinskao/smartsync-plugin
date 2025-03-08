@@ -2,7 +2,7 @@
 /*
 Plugin Name: SmartSync Crawler
 Description: 爬取 Jarvis 網站商品資訊
-Version: 1.8
+Version: 1.9
 Author: VinsKao
 */
 
@@ -56,13 +56,13 @@ function crawler_get_product_urls($url) {
 function crawler_get_product_name($url) {
     $html = crawler_fetch_html($url);
     if (!$html) return '';
-
-    $dom = new DOMDocument();
+        
+        $dom = new DOMDocument();
     libxml_use_internal_errors(true); // 抑制HTML解析警告
     $dom->loadHTML($html);
     libxml_clear_errors();
     
-    $xpath = new DOMXPath($dom);
+        $xpath = new DOMXPath($dom);
     $title = $xpath->query('//title');
 
     if ($title->length > 0) {
@@ -76,7 +76,7 @@ function crawler_get_product_name($url) {
 function crawler_get_product_short_description($url) {
     $html = crawler_fetch_html($url);
     if (!$html) return '';
-        
+
     $dom = new DOMDocument();
     libxml_use_internal_errors(true); // 抑制HTML解析警告
     $dom->loadHTML($html);
@@ -92,72 +92,92 @@ function crawler_get_product_short_description($url) {
     return '';
 }
 
-// 獲取產品描述（修改版 - 抓取從第一個到最後一個特定樣式元素間的所有 HTML）
+// 獲取產品描述（修改版 - 移除重複的「賣場需知」段落）
 function crawler_get_styled_description($url) {
     $html = crawler_fetch_html($url);
     if (!$html) return '';
-
-    // 找出包含特定樣式的所有元素
-    $style_pattern = 'style\s*=\s*["\']font-family:\s*\'Microsoft JhengHei\',\s*SimHei,\s*Arial;';
     
-    // 使用 DOM 解析獲取完整區間
-    $dom = new DOMDocument();
+    // 使用DOM提取並重建圖片標籤
+    $dom_images = new DOMDocument();
     libxml_use_internal_errors(true);
-    $dom->loadHTML($html);
+    $dom_images->loadHTML('<?xml encoding="UTF-8">' . $html);
     libxml_clear_errors();
     
-    $xpath = new DOMXPath($dom);
-    // 查找所有包含該樣式的元素
-    $styled_elements = $xpath->query("//*[contains(@style, \"font-family: 'Microsoft JhengHei', SimHei, Arial;\")]");
+    $xpath_images = new DOMXPath($dom_images);
+    $img_nodes = $xpath_images->query('//img[contains(@src, ".png")]');
     
-    if ($styled_elements->length === 0) {
-        return '';
+    $png_html = '';
+    foreach ($img_nodes as $img) {
+        $src = $img->getAttribute('src');
+        // 排除不需要的圖片路徑
+        if (strpos($src, '/footer_icon/') !== false ||
+            strpos($src, '/logos/') !== false ||
+            strpos($src, '/ICON/') !== false ||
+            strpos($src, 'download') !== false ||
+            strpos($src, 'meta property') !== false) {
+            continue;
+        }
+        
+        // 重建圖片標籤，確保屬性格式正確
+        $new_img = $dom_images->createElement('img');
+        $new_img->setAttribute('src', $src);
+        $new_img->setAttribute('alt', $img->getAttribute('alt'));
+        $new_img->setAttribute('title', $img->getAttribute('title'));
+        
+        // 處理class屬性（移除多餘空格和引號）
+        $class = trim(preg_replace('/\s+/', ' ', $img->getAttribute('class')));
+        if (!empty($class)) {
+            $new_img->setAttribute('class', $class);
+        }
+        
+        $png_html .= $dom_images->saveHTML($new_img);
+    }
+
+    // 使用DOM提取樣式區域，保留整段HTML元素
+    $dom_style = new DOMDocument();
+    libxml_use_internal_errors(true);
+    $dom_style->loadHTML('<?xml encoding="UTF-8">' . $html);
+    libxml_clear_errors();
+    
+    $xpath_style = new DOMXPath($dom_style);
+    $style_elements = $xpath_style->query("//*[contains(@style, \"font-family: 'Microsoft JhengHei', SimHei, Arial;\")]");
+    
+    // 使用集合來追蹤已處理過的父元素以避免重複
+    $processed_parents = [];
+    $style_html = '';
+    
+    if ($style_elements->length > 0) {
+        foreach ($style_elements as $element) {
+            // 保留整段HTML元素，而不是只保留span
+            $parent = $element->parentNode;
+            while ($parent && $parent->nodeName != 'body') {
+                // 使用nodeValue檢查是否已經處理過相似內容
+                $content = $parent->nodeValue;
+                $hash = md5($content);
+                
+                if (!isset($processed_parents[$hash])) {
+                    $processed_parents[$hash] = true;
+                    $style_html .= $dom_style->saveHTML($parent);
+                }
+                break; // 只保留最外層的父元素
+            }
+        }
     }
     
-    // 獲取第一個元素和最後一個元素
-    $first_element = $styled_elements->item(0);
-    $last_element = $styled_elements->item($styled_elements->length - 1);
+    // 合併內容並在圖片和文字之間加入換行符號，然後徹底移除超連結
+    $final_html = $png_html . '<br>' . $style_html;
     
-    // 找出第一個元素的起始位置
-    $html_content = $dom->saveHTML();
+    // 使用正則徹底移除所有超連結（包括嵌套情況）
+    $final_html = preg_replace('/<a\b[^>]*>(.*?)<\/a>/is', '$1', $final_html);
     
-    // 分析原始 HTML 找出第一個出現該樣式的位置
-    preg_match_all("/<[^>]*$style_pattern[^>]*>/", $html_content, $style_matches, PREG_OFFSET_CAPTURE);
+    // 規範化屬性引號（處理多餘引號問題）
+    $final_html = preg_replace('/\s*=\s*""/', '=""', $final_html); // 統一引號格式
+    $final_html = preg_replace('/(<img[^>]+)\s+>/', '$1>', $final_html); // 移除多餘空格
     
-    if (empty($style_matches[0])) {
-        return '';
-    }
+    // 移除重複的「賣場需知」段落
+    $final_html = preg_replace('/(<p><span[^>]*><strong><span[^>]*>賣場需知<\/span><\/strong><\/span>.*?)<p><span[^>]*><strong><span[^>]*>賣場需知<\/span><\/strong><\/span>/s', '$1', $final_html);
     
-    // 獲取第一次出現的位置
-    $first_pos = $style_matches[0][0][1];
-    
-    // 向前查找最近的開始標籤 (<div, <p, <section 等)
-    $section_start = strrpos(substr($html_content, 0, $first_pos), '<');
-    
-    // 向後找到最後一個包含該樣式的元素後的結束標籤
-    $last_style_pos = $style_matches[0][count($style_matches[0]) - 1][1];
-    $last_style_tag = $style_matches[0][count($style_matches[0]) - 1][0];
-    $tag_name = preg_match('/<([a-z0-9]+)[^>]*' . $style_pattern . '[^>]*>/i', $last_style_tag, $tag_matches) ? $tag_matches[1] : '';
-    
-    // 從最後樣式標籤位置開始查找對應的結束標籤
-    $search_pos = $last_style_pos + strlen($last_style_tag);
-    $end_tag = "</$tag_name>";
-    $section_end = strpos($html_content, $end_tag, $search_pos);
-    
-    if ($section_end === false) {
-        // 如果找不到精確的結束標籤，嘗試獲取一個合理的結束位置
-        $section_end = strlen($html_content);
-    } else {
-        $section_end += strlen($end_tag);
-    }
-    
-    // 提取包含所有樣式元素的 HTML 部分
-    $description_html = substr($html_content, $section_start, $section_end - $section_start);
-    
-    // 清理提取的 HTML（移除不必要的 HTML 頭和 body 標籤等）
-    $description_html = preg_replace('/<\/?html[^>]*>|<\/?head[^>]*>|<\/?body[^>]*>/', '', $description_html);
-    
-    return trim($description_html);
+    return trim($final_html);
 }
 
 // 獲取產品實際價格
