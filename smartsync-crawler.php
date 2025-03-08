@@ -2,7 +2,7 @@
 /*
 Plugin Name: SmartSync Crawler
 Description: 爬取 Jarvis 網站商品資訊
-Version: 1.7
+Version: 1.8
 Author: VinsKao
 */
 
@@ -55,7 +55,7 @@ function crawler_get_product_urls($url) {
 // 獲取產品名稱
 function crawler_get_product_name($url) {
     $html = crawler_fetch_html($url);
-    if (!$html) return '未知產品';
+    if (!$html) return '';
 
     $dom = new DOMDocument();
     libxml_use_internal_errors(true); // 抑制HTML解析警告
@@ -69,13 +69,13 @@ function crawler_get_product_name($url) {
         return trim($title->item(0)->nodeValue);
     }
 
-    return '未知產品';
+    return '';
 }
 
 // 獲取產品簡短描述
 function crawler_get_product_short_description($url) {
     $html = crawler_fetch_html($url);
-    if (!$html) return '無描述';
+    if (!$html) return '';
         
     $dom = new DOMDocument();
     libxml_use_internal_errors(true); // 抑制HTML解析警告
@@ -89,13 +89,81 @@ function crawler_get_product_short_description($url) {
         return trim($description->item(0)->getAttribute('content'));
     }
 
-    return '無描述';
+    return '';
+}
+
+// 獲取產品描述（修改版 - 抓取從第一個到最後一個特定樣式元素間的所有 HTML）
+function crawler_get_styled_description($url) {
+    $html = crawler_fetch_html($url);
+    if (!$html) return '';
+
+    // 找出包含特定樣式的所有元素
+    $style_pattern = 'style\s*=\s*["\']font-family:\s*\'Microsoft JhengHei\',\s*SimHei,\s*Arial;';
+    
+    // 使用 DOM 解析獲取完整區間
+    $dom = new DOMDocument();
+    libxml_use_internal_errors(true);
+    $dom->loadHTML($html);
+    libxml_clear_errors();
+    
+    $xpath = new DOMXPath($dom);
+    // 查找所有包含該樣式的元素
+    $styled_elements = $xpath->query("//*[contains(@style, \"font-family: 'Microsoft JhengHei', SimHei, Arial;\")]");
+    
+    if ($styled_elements->length === 0) {
+        return '';
+    }
+    
+    // 獲取第一個元素和最後一個元素
+    $first_element = $styled_elements->item(0);
+    $last_element = $styled_elements->item($styled_elements->length - 1);
+    
+    // 找出第一個元素的起始位置
+    $html_content = $dom->saveHTML();
+    
+    // 分析原始 HTML 找出第一個出現該樣式的位置
+    preg_match_all("/<[^>]*$style_pattern[^>]*>/", $html_content, $style_matches, PREG_OFFSET_CAPTURE);
+    
+    if (empty($style_matches[0])) {
+        return '';
+    }
+    
+    // 獲取第一次出現的位置
+    $first_pos = $style_matches[0][0][1];
+    
+    // 向前查找最近的開始標籤 (<div, <p, <section 等)
+    $section_start = strrpos(substr($html_content, 0, $first_pos), '<');
+    
+    // 向後找到最後一個包含該樣式的元素後的結束標籤
+    $last_style_pos = $style_matches[0][count($style_matches[0]) - 1][1];
+    $last_style_tag = $style_matches[0][count($style_matches[0]) - 1][0];
+    $tag_name = preg_match('/<([a-z0-9]+)[^>]*' . $style_pattern . '[^>]*>/i', $last_style_tag, $tag_matches) ? $tag_matches[1] : '';
+    
+    // 從最後樣式標籤位置開始查找對應的結束標籤
+    $search_pos = $last_style_pos + strlen($last_style_tag);
+    $end_tag = "</$tag_name>";
+    $section_end = strpos($html_content, $end_tag, $search_pos);
+    
+    if ($section_end === false) {
+        // 如果找不到精確的結束標籤，嘗試獲取一個合理的結束位置
+        $section_end = strlen($html_content);
+    } else {
+        $section_end += strlen($end_tag);
+    }
+    
+    // 提取包含所有樣式元素的 HTML 部分
+    $description_html = substr($html_content, $section_start, $section_end - $section_start);
+    
+    // 清理提取的 HTML（移除不必要的 HTML 頭和 body 標籤等）
+    $description_html = preg_replace('/<\/?html[^>]*>|<\/?head[^>]*>|<\/?body[^>]*>/', '', $description_html);
+    
+    return trim($description_html);
 }
 
 // 獲取產品實際價格
 function crawler_get_product_actual_price($url) {
     $html = crawler_fetch_html($url);
-    if (!$html) return '無價格';
+    if (!$html) return '';
 
     $dom = new DOMDocument();
     libxml_use_internal_errors(true); // 抑制HTML解析警告
@@ -109,153 +177,7 @@ function crawler_get_product_actual_price($url) {
         return trim($price->item(0)->getAttribute('content'));
     }
 
-    return '無價格';
-}
-
-// 獲取產品描述
-function crawler_get_product_description($url) {
-    $html = crawler_fetch_html($url);
-    if (!$html) return '無介紹';
-
-    $dom = new DOMDocument();
-    libxml_use_internal_errors(true); // 抑制HTML解析警告
-    $dom->loadHTML($html);
-    libxml_clear_errors();
-    
-    $xpath = new DOMXPath($dom);
-    $intro = $xpath->query('//meta[@itemprop="description"]');
-
-    if ($intro->length > 0) {
-        return trim($intro->item(0)->getAttribute('content'));
-    }
-
-    return '無介紹';
-}
-
-// 獲取商品圖片連結
-function crawler_get_product_images($url) {
-    $html = crawler_fetch_html($url);
-    if (!$html) return '無圖片';
-
-    $dom = new DOMDocument();
-    libxml_use_internal_errors(true); // 抑制HTML解析警告
-    $dom->loadHTML($html);
-    libxml_clear_errors();
-    
-    $xpath = new DOMXPath($dom);
-    $images = $xpath->query('//img[contains(@src, ".png")]');
-
-    $image_links = [];
-    foreach ($images as $img) {
-        $src = $img->getAttribute('src');
-        if (!empty($src)) {
-            // 排除包含 /footer_icon/、/logos/ 和 /ICON/ 的圖片連結
-            if (strpos($src, '/footer_icon/') === false &&
-                strpos($src, '/logos/') === false &&
-                strpos($src, '/ICON/') === false) {
-                $image_links[] = $src;
-            }
-        }
-    }
-
-    // 用逗號分隔所有圖片連結
-    return implode(',', $image_links);
-}
-
-// 獲取商品影片連結
-function crawler_get_product_video($url) {
-    $html = crawler_fetch_html($url);
-    if (!$html) return '';
-
-    $dom = new DOMDocument();
-    libxml_use_internal_errors(true); // 抑制HTML解析警告
-    $dom->loadHTML($html);
-    libxml_clear_errors();
-    
-    $xpath = new DOMXPath($dom);
-    $iframes = $xpath->query('//iframe');
-
-    foreach ($iframes as $iframe) {
-        $src = $iframe->getAttribute('src');
-        if (strpos($src, 'https://www.youtube.com/embed') !== false) {
-            return trim($src);
-        }
-    }
-
     return '';
-}
-
-// 獲取商品文章內容
-function crawler_get_product_articles($url) {
-    $html = crawler_fetch_html($url);
-    if (!$html) return '無描述內容';
-
-    $dom = new DOMDocument();
-    libxml_use_internal_errors(true); // 抑制HTML解析警告
-    $dom->loadHTML($html);
-    libxml_clear_errors();
-    
-    $xpath = new DOMXPath($dom);
-    $description_div = $xpath->query('//div[@id="content_description"]');
-
-    if ($description_div->length === 0) {
-        return '無描述內容';
-    }
-
-    $content = [];
-    // 抓取所有 <p> 和 <span> 的文字內容
-    $paragraphs = $xpath->query('.//p', $description_div->item(0));
-    $spans = $xpath->query('.//span', $description_div->item(0));
-
-    foreach ($paragraphs as $p) {
-        $text = trim($p->nodeValue);
-        if (!empty($text)) {
-            $content[] = $text;
-        }
-    }
-
-    foreach ($spans as $span) {
-        $text = trim($span->nodeValue);
-        if (!empty($text)) {
-            $content[] = $text;
-        }
-    }
-
-    // 用換行符分隔所有段落和 span 的文字內容
-    return implode("\n", $content);
-}
-
-// 獲取產品注意事項與 QA（修改版 - 防止數據重複）
-function crawler_get_product_notes($url) {
-    $html = crawler_fetch_html($url);
-    if (!$html) return '';
-
-    $dom = new DOMDocument();
-    libxml_use_internal_errors(true);
-    $dom->loadHTML($html);
-    libxml_clear_errors();
-    
-    $xpath = new DOMXPath($dom);
-    $notes_div = $xpath->query('//div[contains(., "產品注意事項")]');
-
-    if ($notes_div->length === 0) {
-        return '';
-    }
-
-    // 使用關聯數組避免重複內容
-    $unique_content = [];
-    $paragraphs = $xpath->query('.//p | .//span', $notes_div->item(0));
-
-    foreach ($paragraphs as $node) {
-        $text = trim($node->nodeValue);
-        if (!empty($text)) {
-            // 使用內容作為鍵確保唯一性
-            $unique_content[$text] = $text;
-        }
-    }
-
-    // 轉換為陣列並合併，使用換行符號
-    return implode("\n", array_values($unique_content));
 }
 
 // 獲取產品原價
@@ -283,7 +205,37 @@ function crawler_get_original_price($url) {
     return $price_text;
 }
 
-// 處理 CSV 下載 (修改版 - 移除筆數限制，1-based索引)
+// 獲取商品圖片連結
+function crawler_get_product_images($url) {
+    $html = crawler_fetch_html($url);
+    if (!$html) return '';
+
+    $dom = new DOMDocument();
+    libxml_use_internal_errors(true); // 抑制HTML解析警告
+    $dom->loadHTML($html);
+    libxml_clear_errors();
+    
+    $xpath = new DOMXPath($dom);
+    $images = $xpath->query('//img[contains(@src, ".png")]');
+
+    $image_links = [];
+    foreach ($images as $img) {
+        $src = $img->getAttribute('src');
+        if (!empty($src)) {
+            // 排除包含 /footer_icon/、/logos/ 和 /ICON/ 的圖片連結
+            if (strpos($src, '/footer_icon/') === false &&
+                strpos($src, '/logos/') === false &&
+                strpos($src, '/ICON/') === false) {
+                $image_links[] = $src;
+            }
+        }
+    }
+
+    // 用逗號分隔所有圖片連結
+    return implode(',', $image_links);
+}
+
+// 處理 CSV 下載 (修改版 - 欄位重新排序)
 function crawler_download_product_urls() {
     if (!isset($_POST['crawler_nonce']) || !wp_verify_nonce($_POST['crawler_nonce'], 'run_crawler_nonce')) {
         wp_die('安全檢查失敗', 403);
@@ -301,7 +253,6 @@ function crawler_download_product_urls() {
         // 確保區間合理
         if ($start_index < 0) $start_index = 0;
         if ($end_index < $start_index) $end_index = $start_index;
-        // 移除 20 筆的限制
         
         $output_dir = __DIR__ . '/output';
         if (!wp_mkdir_p($output_dir)) {
@@ -327,88 +278,21 @@ function crawler_download_product_urls() {
         
         $product_urls = array_slice($all_product_urls, $start_index, ($end_index - $start_index + 1));
         
-        // 獲取所有產品數據
+        // 獲取所有產品數據（根據新的欄位順序）
         $product_names = [];
         $product_short_descriptions = [];
+        $product_styled_descriptions = [];
         $product_actual_prices = [];
-        $product_descriptions = [];
-        $product_images = [];
-        $product_videos = [];
-        $product_articles = [];
-        $product_notes_data = [];
-        $product_qa_data = [];
         $product_original_prices = [];
+        $product_images = [];
         
         foreach ($product_urls as $url) {
             $product_names[] = crawler_get_product_name($url);
             $product_short_descriptions[] = crawler_get_product_short_description($url);
+            $product_styled_descriptions[] = crawler_get_styled_description($url);
             $product_actual_prices[] = crawler_get_product_actual_price($url);
-            $product_descriptions[] = crawler_get_product_description($url);
-            $product_images[] = crawler_get_product_images($url);
-            $product_videos[] = crawler_get_product_video($url);
-            $product_articles[] = crawler_get_product_articles($url);
-            
-            // 獲取第二個CSV中的數據
-            $raw_notes = crawler_get_product_notes($url);
-            
-            // 處理注意事項和QA數據
-            $notes = '';
-            $qa = '';
-            
-            // 處理內容分割
-            $first_notes_pos = mb_strpos($raw_notes, '產品注意事項', 0, 'UTF-8');
-            $first_qa_pos = mb_strpos($raw_notes, '產品QA', 0, 'UTF-8');
-
-            if ($first_notes_pos !== false) {
-                $notes_end_pos = ($first_qa_pos !== false) ? $first_qa_pos : null;
-                $notes = ($notes_end_pos !== null) 
-                    ? mb_substr($raw_notes, $first_notes_pos, $notes_end_pos - $first_notes_pos, 'UTF-8')
-                    : mb_substr($raw_notes, $first_notes_pos, null, 'UTF-8');
-            }
-
-            if ($first_qa_pos !== false) {
-                $qa = mb_substr($raw_notes, $first_qa_pos, null, 'UTF-8');
-            }
-
-            // 檢查是否包含"因改良而有變更時"，如果有則截斷
-            $cutoff_pos = mb_strpos($notes, '因改良而有變更時', 0, 'UTF-8');
-            if ($cutoff_pos !== false) {
-                $notes = mb_substr($notes, 0, $cutoff_pos, 'UTF-8');
-            }
-
-            $cutoff_pos = mb_strpos($qa, '因改良而有變更時', 0, 'UTF-8');
-            if ($cutoff_pos !== false) {
-                $qa = mb_substr($qa, 0, $cutoff_pos, 'UTF-8');
-            }
-            
-            // 去重處理
-            if (!empty($notes)) {
-                $notes_array = explode("\n", $notes);
-                $unique_notes = [];
-                foreach ($notes_array as $note) {
-                    $trimmed = trim($note);
-                    if (!empty($trimmed)) {
-                        $unique_notes[$trimmed] = $trimmed;
-                    }
-                }
-                $notes = implode("\n", array_values($unique_notes));
-            }
-            
-            if (!empty($qa)) {
-                $qa_array = explode("\n", $qa);
-                $unique_qa = [];
-                foreach ($qa_array as $q) {
-                    $trimmed = trim($q);
-                    if (!empty($trimmed)) {
-                        $unique_qa[$trimmed] = $trimmed;
-                    }
-                }
-                $qa = implode("\n", array_values($unique_qa));
-            }
-            
-            $product_notes_data[] = $notes;
-            $product_qa_data[] = $qa;
             $product_original_prices[] = crawler_get_original_price($url);
+            $product_images[] = crawler_get_product_images($url);
         }
 
         // 寫入CSV文件（確保UTF-8編碼）
@@ -421,26 +305,21 @@ function crawler_download_product_urls() {
         // 寫入UTF-8 BOM，確保Excel等軟件正確識別編碼
         fwrite($file_handle, "\xEF\xBB\xBF");
         
-        // 寫入表頭（合併兩個CSV的欄位）
+        // 寫入表頭（根據新的欄位順序）
         fputcsv($file_handle, [
-            'URL', 'Name', 'Short Description', 'ActualPrice', 'Description', 'Images', 'Video', 'Articles',
-            '產品注意事項', '產品QA', '原價'
+            'URL', '名稱', '簡短內容說明', '描述', '特價', '原價', '圖片'
         ]);
         
-        // 寫入數據
+        // 寫入數據（根據新的欄位順序）
         foreach ($product_urls as $index => $url) {
             fputcsv($file_handle, [
                 $url, 
                 $product_names[$index], 
                 $product_short_descriptions[$index], 
+                $product_styled_descriptions[$index],
                 $product_actual_prices[$index], 
-                $product_descriptions[$index], 
-                $product_images[$index], 
-                $product_videos[$index],
-                $product_articles[$index],
-                $product_notes_data[$index],
-                $product_qa_data[$index],
-                $product_original_prices[$index]
+                $product_original_prices[$index],
+                $product_images[$index]
             ]);
         }
 
