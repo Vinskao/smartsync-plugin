@@ -2,7 +2,7 @@
 /*
 Plugin Name: SmartSync Crawler
 Description: 爬取 Jarvis 網站商品資訊
-Version: 1.9
+Version: 2.0
 Author: VinsKao
 */
 
@@ -140,27 +140,92 @@ function crawler_get_styled_description($url) {
     libxml_clear_errors();
     
     $xpath_style = new DOMXPath($dom_style);
-    $style_elements = $xpath_style->query("//*[contains(@style, \"font-family: 'Microsoft JhengHei', SimHei, Arial;\")]");
     
-    // 使用集合來追蹤已處理過的父元素以避免重複
-    $processed_parents = [];
+    // 嘗試多種方法查找產品QA相關內容
     $style_html = '';
     
-    if ($style_elements->length > 0) {
-        foreach ($style_elements as $element) {
-            // 保留整段HTML元素，而不是只保留span
-            $parent = $element->parentNode;
-            while ($parent && $parent->nodeName != 'body') {
-                // 使用nodeValue檢查是否已經處理過相似內容
-                $content = $parent->nodeValue;
-                $hash = md5($content);
-                
-                if (!isset($processed_parents[$hash])) {
-                    $processed_parents[$hash] = true;
-                    $style_html .= $dom_style->saveHTML($parent);
+    // 方法1: 嘗試查找任何包含"產品QA"文本的元素，然後找到其父div
+    $qa_elements = $xpath_style->query("//*[contains(text(), '產品QA')]");
+    
+    if ($qa_elements->length > 0) {
+        error_log('找到包含"產品QA"文本的元素: ' . $qa_elements->length . '個');
+        
+        // 獲取包含產品QA的元素
+        $qa_element = $qa_elements->item(0);
+        
+        // 尋找最近的div父元素
+        $parent = $qa_element;
+        while ($parent && $parent->nodeName != 'div') {
+            $parent = $parent->parentNode;
+        }
+        
+        if ($parent && $parent->nodeName == 'div') {
+            // 找到了包含產品QA的div
+            error_log('找到包含產品QA的父div');
+            
+            // 獲取此div下的所有span
+            $spans = $xpath_style->query('.//span', $parent);
+            
+            error_log('在父div下找到 ' . $spans->length . ' 個span元素');
+            
+            foreach ($spans as $span) {
+                $text_content = trim($span->textContent);
+                if (!empty($text_content)) {
+                    // 用p標籤包裹每個span的內容
+                    $style_html .= '<p>' . $text_content . '</p>' . "\n";
                 }
-                break; // 只保留最外層的父元素
             }
+        } else {
+            error_log('未找到包含產品QA元素的父div');
+            
+            // 如果找不到父div，直接用產品QA元素的內容
+            $text_content = trim($qa_element->textContent);
+            if (!empty($text_content)) {
+                $style_html .= '<p>' . $text_content . '</p>' . "\n";
+            }
+            
+            // 嘗試找到相鄰的元素作為相關內容
+            $next_element = $qa_element->nextSibling;
+            while ($next_element) {
+                if ($next_element->nodeType == 1) { // 元素節點
+                    $spans = $xpath_style->query('.//span', $next_element);
+                    foreach ($spans as $span) {
+                        $text_content = trim($span->textContent);
+                        if (!empty($text_content)) {
+                            $style_html .= '<p>' . $text_content . '</p>' . "\n";
+                        }
+                    }
+                }
+                $next_element = $next_element->nextSibling;
+            }
+        }
+    } else {
+        error_log('未找到包含"產品QA"文本的元素，嘗試使用正則表達式');
+        
+        // 方法2: 使用正則表達式直接從HTML中提取包含產品QA的部分
+        if (preg_match('/<[^>]*>產品QA<\/[^>]*>/', $html, $matches)) {
+            error_log('使用正則表達式找到產品QA標記');
+            
+            // 提取產品QA部分的HTML片段
+            $qa_pos = strpos($html, $matches[0]);
+            if ($qa_pos !== false) {
+                // 截取產品QA後的一段HTML
+                $qa_html = substr($html, $qa_pos, 5000); // 截取5000字符應該足夠
+                
+                // 使用正則表達式提取所有span標籤的內容
+                preg_match_all('/<span[^>]*>(.*?)<\/span>/s', $qa_html, $span_matches);
+                
+                error_log('找到 ' . count($span_matches[1]) . ' 個span內容');
+                
+                foreach ($span_matches[1] as $span_content) {
+                    $text_content = trim(strip_tags($span_content));
+                    if (!empty($text_content)) {
+                        $style_html .= '<p>' . $text_content . '</p>' . "\n";
+                    }
+                }
+            }
+        } else {
+            error_log('使用正則表達式也未找到產品QA部分');
         }
     }
     

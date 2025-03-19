@@ -1,0 +1,101 @@
+/*! elementor - v3.21.0 - 26-05-2024 */
+.elementor-accordion{text-align:start}.elementor-accordion .elementor-accordion-item{border:1px solid #d5d8dc}.elementor-accordion .elementor-accordion-item+.elementor-accordion-item{border-top:none}.elementor-accordion .elementor-tab-title{margin:0;padding:15px 20px;font-weight:700;line-height:1;cursor:pointer;outline:none}.elementor-accordion .elementor-tab-title .elementor-accordion-icon{display:inline-block;width:1.5em}.elementor-accordion .elementor-tab-title .elementor-accordion-icon svg{width:1em;height:1em}.elementor-accordion .elementor-tab-title .elementor-accordion-icon.elementor-accordion-icon-right{float:right;text-align:right}.elementor-accordion .elementor-tab-title .elementor-accordion-icon.elementor-accordion-icon-left{float:left;text-align:left}.elementor-accordion .elementor-tab-title .elementor-accordion-icon .elementor-accordion-icon-closed{display:block}.elementor-accordion .elementor-tab-title .elementor-accordion-icon .elementor-accordion-icon-opened,.elementor-accordion .elementor-tab-title.elementor-active .elementor-accordion-icon-closed{display:none}.elementor-accordion .elementor-tab-title.elementor-active .elementor-accordion-icon-opened{display:block}.elementor-accordion .elementor-tab-content{display:none;padding:15px 20px;border-top:1px solid #d5d8dc}@media (max-width:767px){.elementor-accordion .elementor-tab-title{padding:12px 15px}.elementor-accordion .elementor-tab-title .elementor-accordion-icon{width:1.2em}.elementor-accordion .elementor-tab-content{padding:7px 15px}}.e-con-inner>.elementor-widget-accordion,.e-con>.elementor-widget-accordion{width:var(--container-widget-width);--flex-grow:var(--container-widget-flex-grow)}
+
+/* 手风琴容器样式 */
+.customerized-accordion.customerized-accordion-container {
+    max-width: 800px;
+    margin: 0 auto;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* 手风琴项目样式 */
+.customerized-accordion .customerized-accordion-item {
+    border: 1px solid #d5d8dc;
+    margin-bottom: -1px;
+    background-color: #fff;
+}
+
+/* 标题样式 */
+.customerized-accordion .customerized-accordion-title {
+    display: flex;
+    align-items: center;
+    padding: 15px 20px;
+    cursor: pointer;
+    font-weight: 600;
+    color: #333;
+    transition: background-color 0.3s ease;
+}
+
+.customerized-accordion .customerized-accordion-title:hover {
+    background-color: #f8f9fa;
+}
+
+/* 图标样式 */
+.customerized-accordion .customerized-accordion-icon {
+    margin-right: 15px;
+    width: 20px;
+    text-align: center;
+}
+
+.customerized-accordion .customerized-icon-closed,
+.customerized-accordion .customerized-icon-opened {
+    display: inline-block;
+    transition: transform 0.3s ease;
+}
+
+.customerized-accordion .customerized-icon-opened {
+    display: none;
+}
+
+/* 激活状态的标题 */
+.customerized-accordion .customerized-accordion-title.active {
+    background-color: #f8f9fa;
+}
+
+.customerized-accordion .customerized-accordion-title.active .customerized-icon-closed {
+    display: none;
+}
+
+.customerized-accordion .customerized-accordion-title.active .customerized-icon-opened {
+    display: inline-block;
+}
+
+/* 内容区域样式 */
+.customerized-accordion .customerized-accordion-content {
+    display: none;
+    padding: 15px 20px;
+    border-top: 1px solid #d5d8dc;
+    color: #666;
+    line-height: 1.6;
+}
+
+/* 响应式调整 */
+@media (max-width: 767px) {
+    .customerized-accordion .customerized-accordion-title {
+        padding: 12px 15px;
+    }
+    
+    .customerized-accordion .customerized-accordion-content {
+        padding: 12px 15px;
+    }
+    
+    .customerized-accordion .customerized-accordion-icon {
+        margin-right: 10px;
+    }
+}
+
+/* 无障碍支持 */
+.customerized-accordion .customerized-accordion-title:focus {
+    outline: 2px solid #007bff;
+    outline-offset: -2px;
+}
+
+/* 标题文本样式 */
+.customerized-accordion .customerized-title-text {
+    flex: 1;
+}
+
+/* Font Awesome 图标颜色 */
+.customerized-accordion .fas {
+    color: #666;
+}

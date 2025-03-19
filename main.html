@@ -1,0 +1,169 @@
+<html>
+    <head>
+        <title>Accordion</title>
+        <link rel="stylesheet" href="style.css">
+        <!-- Add Font Awesome -->
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+        <!-- Add jQuery -->
+        <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+        <script>
+            jQuery(document).ready(function($) {
+                $('.customerized-accordion-container .customerized-accordion-title').on('click', function() {
+                    var $accordionItem = $(this).closest('.customerized-accordion-item');
+                    var $content = $accordionItem.find('.customerized-accordion-content');
+                    
+                    if ($(this).hasClass('active')) {
+                        $(this).removeClass('active');
+                        $content.slideUp(200, 'swing');
+                    } else {
+                        // Close all other accordion items
+                        $(this).closest('.customerized-accordion-container').find('.customerized-accordion-title').removeClass('active');
+                        $(this).closest('.customerized-accordion-container').find('.customerized-accordion-content').slideUp(200, 'swing');
+                        
+                        // Open clicked accordion item
+                        $(this).addClass('active');
+                        $content.slideDown(200, 'swing');
+                    }
+                });
+            });
+        </script>
+    </head>
+    <body>
+        <div class="container">
+            <div class="customerized-accordion-container customerized-accordion">
+                <div class="customerized-accordion-item">
+                    <div class="customerized-accordion-title" role="button" tabindex="0">
+                        <span class="customerized-accordion-icon">
+                            <span class="customerized-icon-closed"><i class="fas fa-plus"></i></span>
+                            <span class="customerized-icon-opened"><i class="fas fa-minus"></i></span>
+                        </span>
+                        <span class="customerized-title-text">Smart Lock Pro X200材料</span>
+                    </div>
+                    <div class="customerized-accordion-content">
+                        <p>觸摸屏使用IML材質，其餘部分由磨砂鋁合金製成。指紋識別模塊使用玻璃覆蓋。</p>
+                    </div>
+                </div>
+                <div class="customerized-accordion-item">
+                    <div class="customerized-accordion-title" role="button" tabindex="0">
+                        <span class="customerized-accordion-icon">
+                            <span class="customerized-icon-closed"><i class="fas fa-plus"></i></span>
+                            <span class="customerized-icon-opened"><i class="fas fa-minus"></i></span>
+                        </span>
+                        <span class="customerized-title-text">鎖體與鎖芯</span>
+                    </div>
+                    <div class="customerized-accordion-content">
+                        <p>配備高安全等級自動鎖體及C級機械鎖芯，提供多層次安全保障。</p>
+                    </div>
+                </div>
+                <div class="customerized-accordion-item">
+                    <div class="customerized-accordion-title" role="button" tabindex="0">
+                        <span class="customerized-accordion-icon">
+                            <span class="customerized-icon-closed"><i class="fas fa-plus"></i></span>
+                            <span class="customerized-icon-opened"><i class="fas fa-minus"></i></span>
+                        </span>
+                        <span class="customerized-title-text">支持的解鎖方式</span>
+                    </div>
+                    <div class="customerized-accordion-content">
+                        <p>支持7種開鎖方式，包括指紋、密碼、APP遠程控制、語音助手、NFC卡、物理鑰匙和手機藍牙快速解鎖。</p>
+                    </div>
+                </div>
+                <div class="customerized-accordion-item">
+                    <div class="customerized-accordion-title" role="button" tabindex="0">
+                        <span class="customerized-accordion-icon">
+                            <span class="customerized-icon-closed"><i class="fas fa-plus"></i></span>
+                            <span class="customerized-icon-opened"><i class="fas fa-minus"></i></span>
+                        </span>
+                        <span class="customerized-title-text">電池規格與壽命</span>
+                    </div>
+                    <div class="customerized-accordion-content">
+                        <p>使用高容量可充電鋰電池，正常使用下可持續約12個月。電量低於20%時會發出提示音，並可通過Type-C接口緊急充電。</p>
+                    </div>
+                </div>
+                <div class="customerized-accordion-item">
+                    <div class="customerized-accordion-title" role="button" tabindex="0">
+                        <span class="customerized-accordion-icon">
+                            <span class="customerized-icon-closed"><i class="fas fa-plus"></i></span>
+                            <span class="customerized-icon-opened"><i class="fas fa-minus"></i></span>
+                        </span>
+                        <span class="customerized-title-text">重置方法</span>
+                    </div>
+                    <div class="customerized-accordion-content">
+                        <p>按住後電池倉下方的複位鍵5秒以上，按語音提示操作完成重置。此操作將清除所有已儲存的指紋、密碼和用戶設置。</p>
+                    </div>
+                </div>
+                <div class="customerized-accordion-item">
+                    <div class="customerized-accordion-title" role="button" tabindex="0">
+                        <span class="customerized-accordion-icon">
+                            <span class="customerized-icon-closed"><i class="fas fa-plus"></i></span>
+                            <span class="customerized-icon-opened"><i class="fas fa-minus"></i></span>
+                        </span>
+                        <span class="customerized-title-text">防水與適用環境</span>
+                    </div>
+                    <div class="customerized-accordion-content">
+                        <p>具有IP54防塵防濺設計，適合室內使用或有遮蓋的室外入口。不建議直接暴露在大雨或極端天氣環境中。</p>
+                    </div>
+                </div>
+                <div class="customerized-accordion-item">
+                    <div class="customerized-accordion-title" role="button" tabindex="0">
+                        <span class="customerized-accordion-icon">
+                            <span class="customerized-icon-closed"><i class="fas fa-plus"></i></span>
+                            <span class="customerized-icon-opened"><i class="fas fa-minus"></i></span>
+                        </span>
+                        <span class="customerized-title-text">門型兼容性</span>
+                    </div>
+                    <div class="customerized-accordion-content">
+                        <p>兼容多數40mm到100mm厚的門。標準安裝適用於40-80mm厚度，80-100mm需使用延長軸配件（須另購）。</p>
+                    </div>
+                </div>
+                <div class="customerized-accordion-item">
+                    <div class="customerized-accordion-title" role="button" tabindex="0">
+                        <span class="customerized-accordion-icon">
+                            <span class="customerized-icon-closed"><i class="fas fa-plus"></i></span>
+                            <span class="customerized-icon-opened"><i class="fas fa-minus"></i></span>
+                        </span>
+                        <span class="customerized-title-text">支持的指紋數量</span>
+                    </div>
+                    <div class="customerized-accordion-content">
+                        <p>最多可存儲50組不同的指紋識別資料，適合全家人使用。</p>
+                    </div>
+                </div>
+                <div class="customerized-accordion-item">
+                    <div class="customerized-accordion-title" role="button" tabindex="0">
+                        <span class="customerized-accordion-icon">
+                            <span class="customerized-icon-closed"><i class="fas fa-plus"></i></span>
+                            <span class="customerized-icon-opened"><i class="fas fa-minus"></i></span>
+                        </span>
+                        <span class="customerized-title-text">密碼功能</span>
+                    </div>
+                    <div class="customerized-accordion-content">
+                        <p>可設置75組不同密碼，支持6-10位數字密碼，並提供最多20位的虛擬密碼防窺視功能。系統還支持一次性密碼及定時生效的周期密碼。</p>
+                    </div>
+                </div>
+                <div class="customerized-accordion-item">
+                    <div class="customerized-accordion-title" role="button" tabindex="0">
+                        <span class="customerized-accordion-icon">
+                            <span class="customerized-icon-closed"><i class="fas fa-plus"></i></span>
+                            <span class="customerized-icon-opened"><i class="fas fa-minus"></i></span>
+                        </span>
+                        <span class="customerized-title-text">安全防護功能</span>
+                    </div>
+                    <div class="customerized-accordion-content">
+                        <p>配備多重安全防護，包括防貓眼開鎖功能、童鎖功能、密碼防試錯鎖定、指紋防假冒識別及自動上鎖防尾隨功能，全方位保障家庭安全。</p>
+                    </div>
+                </div>
+                <div class="customerized-accordion-item">
+                    <div class="customerized-accordion-title" role="button" tabindex="0">
+                        <span class="customerized-accordion-icon">
+                            <span class="customerized-icon-closed"><i class="fas fa-plus"></i></span>
+                            <span class="customerized-icon-opened"><i class="fas fa-minus"></i></span>
+                        </span>
+                        <span class="customerized-title-text">智能互聯功能</span>
+                    </div>
+                    <div class="customerized-accordion-content">
+                        <p>支持與主流智能家居系統連接，包括Apple HomeKit、Google Home及Alexa，可通過語音助手或智能場景自動化控制。</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </body>
+</html>
