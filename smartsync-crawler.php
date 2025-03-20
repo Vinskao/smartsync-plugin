@@ -2,7 +2,7 @@
 /*
 Plugin Name: SmartSync Crawler
 Description: 爬取 Jarvis 網站商品資訊
-Version: 2.1
+Version: 2.2
 Author: VinsKao
 */
 
@@ -203,13 +203,16 @@ function crawler_get_styled_description($url) {
     $style_html = '';
     
     // 方法1: 嘗試查找任何包含"產品QA"文本的元素，然後找到其父div
-    $qa_elements = $xpath_style->query("//*[contains(text(), '產品QA')]");
+    $qa_elements = $xpath_style->query("//span[text()='產品QA']");
     
     if ($qa_elements->length > 0) {
-        error_log('找到包含"產品QA"文本的元素: ' . $qa_elements->length . '個');
+        error_log('找到精確匹配"產品QA"文本的元素: ' . $qa_elements->length . '個');
         
         // 獲取包含產品QA的元素
         $qa_element = $qa_elements->item(0);
+        
+        // 先添加QA標題
+        $style_html = '<p>產品QA</p>' . "\n";
         
         // 尋找最近的div父元素
         $parent = $qa_element;
@@ -221,44 +224,137 @@ function crawler_get_styled_description($url) {
             // 找到了包含產品QA的div
             error_log('找到包含產品QA的父div');
             
-            // 獲取此div下的所有span
-            $spans = $xpath_style->query('.//span', $parent);
+            // 獲取QA後的所有span
+            $spans = $xpath_style->query('//span', $parent->parentNode);
             
-            error_log('在父div下找到 ' . $spans->length . ' 個span元素');
-            
-            foreach ($spans as $span) {
-                $text_content = trim($span->textContent);
-                if (!empty($text_content)) {
-                    // 用p標籤包裹每個span的內容
-                    $style_html .= '<p>' . $text_content . '</p>' . "\n";
+            // 找到產品QA的位置
+            $qa_position = -1;
+            for ($i = 0; $i < $spans->length; $i++) {
+                if (trim($spans->item($i)->textContent) === '產品QA') {
+                    $qa_position = $i;
+                    break;
                 }
             }
-        } else {
-            error_log('未找到包含產品QA元素的父div');
             
-            // 如果找不到父div，直接用產品QA元素的內容
-            $text_content = trim($qa_element->textContent);
-            if (!empty($text_content)) {
-                $style_html .= '<p>' . $text_content . '</p>' . "\n";
-            }
-            
-            // 嘗試找到相鄰的元素作為相關內容
-            $next_element = $qa_element->nextSibling;
-            while ($next_element) {
-                if ($next_element->nodeType == 1) { // 元素節點
-                    $spans = $xpath_style->query('.//span', $next_element);
-                    foreach ($spans as $span) {
-                        $text_content = trim($span->textContent);
-                        if (!empty($text_content)) {
-                            $style_html .= '<p>' . $text_content . '</p>' . "\n";
-                        }
+            if ($qa_position >= 0) {
+                // 按順序收集QA後的所有span
+                $all_qa_spans = array();
+                $titles = array();
+                $contents = array();
+                
+                for ($i = $qa_position + 1; $i < $spans->length; $i++) {
+                    $span = $spans->item($i);
+                    $text = trim($span->textContent);
+                    
+                    if (empty($text)) continue;
+                    
+                    // 檢查是否為標題（帶有背景色的span）
+                    $style_attr = $span->getAttribute('style');
+                    $is_title = (strpos($style_attr, 'background-color') !== false);
+                    
+                    if ($is_title) {
+                        $titles[] = array('index' => count($all_qa_spans), 'text' => $text);
+                    } else {
+                        $contents[] = array('index' => count($all_qa_spans), 'text' => $text);
+                    }
+                    
+                    $all_qa_spans[] = array(
+                        'text' => $text,
+                        'is_title' => $is_title
+                    );
+                }
+                
+                // 準備手風琴結構
+                $style_html .= '<div class="customerized-accordion-container customerized-accordion">' . "\n";
+                
+                // 逐對創建手風琴項目
+                for ($i = 0; $i < count($all_qa_spans) - 1; $i++) {
+                    if ($all_qa_spans[$i]['is_title'] && !$all_qa_spans[$i+1]['is_title']) {
+                        $title = $all_qa_spans[$i]['text'];
+                        $content = $all_qa_spans[$i+1]['text'];
+                        
+                        // 創建手風琴項目
+                        $style_html .= '<div class="customerized-accordion-item">' . "\n";
+                        
+                        // 標題部分
+                        $style_html .= '<div class="customerized-accordion-title" role="button" tabindex="0">' . "\n";
+                        $style_html .= '<span class="customerized-accordion-icon">' . "\n";
+                        $style_html .= '<span class="customerized-icon-closed"><i class="fas fa-plus"></i></span>' . "\n";
+                        $style_html .= '<span class="customerized-icon-opened"><i class="fas fa-minus"></i></span>' . "\n";
+                        $style_html .= '</span>' . "\n";
+                        $style_html .= '<span class="customerized-title-text">' . $title . '</span>' . "\n";
+                        $style_html .= '</div>' . "\n";
+                        
+                        // 內容部分
+                        $style_html .= '<div class="customerized-accordion-content">' . "\n";
+                        $style_html .= '<p>' . $content . '</p>' . "\n";
+                        $style_html .= '</div>' . "\n";
+                        
+                        $style_html .= '</div>' . "\n"; // 結束 accordion-item
+                        
+                        // 跳過下一個元素，因為已經用掉了
+                        $i++;
                     }
                 }
-                $next_element = $next_element->nextSibling;
+                
+                $style_html .= '</div>'; // 結束 customerized-accordion-container
+            } else {
+                error_log('未找到產品QA在span列表中的位置');
+                $style_html .= '<p>未能正確解析產品QA內容</p>';
+            }
+        } else {
+            // 如果找不到正確的div，使用正則表達式方法
+            error_log('未找到包含產品QA元素的父div，使用備用方法');
+            
+            // 從HTML中提取產品QA後的內容
+            preg_match('/<[^>]*>產品QA<\/[^>]*>(.*)/s', $html, $qa_content_match);
+            
+            if (!empty($qa_content_match[1])) {
+                $qa_html = $qa_content_match[1];
+                
+                // 使用正則表達式提取帶有背景色的span和其後的span
+                preg_match_all('/<span[^>]*style="[^"]*background-color[^"]*"[^>]*>(.*?)<\/span>.*?<span[^>]*>(?:<[^>]*>)*(.*?)(?:<\/[^>]*>)*<\/span>/s', $qa_html, $qa_pairs_match);
+                
+                // 添加QA標題
+                $style_html = '<p>產品QA</p>' . "\n";
+                
+                // 準備手風琴結構
+                $style_html .= '<div class="customerized-accordion-container customerized-accordion">' . "\n";
+                
+                // 構建手風琴HTML
+                for ($i = 0; $i < count($qa_pairs_match[1]); $i++) {
+                    $title = trim(strip_tags($qa_pairs_match[1][$i]));
+                    $content = trim(strip_tags($qa_pairs_match[2][$i]));
+                    
+                    if (empty($title) || empty($content)) continue;
+                    
+                    $style_html .= '<div class="customerized-accordion-item">' . "\n";
+                    
+                    // 標題部分
+                    $style_html .= '<div class="customerized-accordion-title" role="button" tabindex="0">' . "\n";
+                    $style_html .= '<span class="customerized-accordion-icon">' . "\n";
+                    $style_html .= '<span class="customerized-icon-closed"><i class="fas fa-plus"></i></span>' . "\n";
+                    $style_html .= '<span class="customerized-icon-opened"><i class="fas fa-minus"></i></span>' . "\n";
+                    $style_html .= '</span>' . "\n";
+                    $style_html .= '<span class="customerized-title-text">' . $title . '</span>' . "\n";
+                    $style_html .= '</div>' . "\n";
+                    
+                    // 內容部分
+                    $style_html .= '<div class="customerized-accordion-content">' . "\n";
+                    $style_html .= '<p>' . $content . '</p>' . "\n";
+                    $style_html .= '</div>' . "\n";
+                    
+                    $style_html .= '</div>' . "\n"; // 結束 accordion-item
+                }
+                
+                $style_html .= '</div>'; // 結束 customerized-accordion-container
+            } else {
+                // 如果完全找不到產品QA內容，加入基本的QA標題
+                $style_html = '<p>產品QA</p>' . "\n";
             }
         }
     } else {
-        error_log('未找到包含"產品QA"文本的元素，嘗試使用正則表達式');
+        error_log('未找到精確匹配"產品QA"文本的元素，嘗試使用正則表達式');
         
         // 方法2: 使用正則表達式直接從HTML中提取包含產品QA的部分
         if (preg_match('/<[^>]*>產品QA<\/[^>]*>/', $html, $matches)) {
@@ -288,7 +384,45 @@ function crawler_get_styled_description($url) {
     }
     
     // 合併內容：圖片 + 產品注意事項到產品QA之間的內容 + QA內容
-    $final_html = $png_html . '<br>' . $notice_to_qa_html . '<br>';
+    $css_js_links = '<link rel="stylesheet" href="style.css">
+<!-- Add Font Awesome -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+<!-- Add jQuery -->
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>';
+
+    $js_code = '<script>
+jQuery(document).ready(function($) {
+    $(\'.customerized-accordion-container .customerized-accordion-title\').on(\'click\', function() {
+        var $accordionItem = $(this).closest(\'.customerized-accordion-item\');
+        var $content = $accordionItem.find(\'.customerized-accordion-content\');
+        
+        if ($(this).hasClass(\'active\')) {
+            $(this).removeClass(\'active\');
+            $content.slideUp(200, \'swing\');
+        } else {
+            // Close all other accordion items
+            $(this).closest(\'.customerized-accordion-container\').find(\'.customerized-accordion-title\').removeClass(\'active\');
+            $(this).closest(\'.customerized-accordion-container\').find(\'.customerized-accordion-content\').slideUp(200, \'swing\');
+            
+            // Open clicked accordion item
+            $(this).addClass(\'active\');
+            $content.slideDown(200, \'swing\');
+        }
+    });
+});
+</script>';
+
+    // 檢查style_html是否包含手風琴結構，如果有則添加container包裹
+    if (strpos($style_html, 'customerized-accordion-container') !== false) {
+        // 在手風琴外層添加container div
+        $style_html = preg_replace(
+            '/(<div class="customerized-accordion-container customerized-accordion">.*?<\/div>)$/s',
+            '<div class="container">$1</div>',
+            $style_html
+        );
+    }
+
+    $final_html = $css_js_links . "\n" . $js_code . "\n" . $png_html . '<br>' . $notice_to_qa_html . '<br>';
 
     // 嘗試從QA部分中移除已經在notice_to_qa_html包含的內容
     if (!empty($notice_to_qa_html) && !empty($style_html)) {
