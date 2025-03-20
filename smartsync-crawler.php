@@ -224,42 +224,37 @@ function crawler_get_styled_description($url) {
             // 找到了包含產品QA的div
             error_log('找到包含產品QA的父div');
             
-            // 獲取QA後的所有span
-            $spans = $xpath_style->query('//span', $parent->parentNode);
+            // 獲取QA後的所有p標籤
+            $paragraphs = $xpath_style->query('//p', $parent->parentNode);
             
-            // 找到產品QA的位置
-            $qa_position = -1;
-            for ($i = 0; $i < $spans->length; $i++) {
-                if (trim($spans->item($i)->textContent) === '產品QA') {
-                    $qa_position = $i;
+            // 找到包含產品QA的段落位置
+            $qa_para_position = -1;
+            for ($i = 0; $i < $paragraphs->length; $i++) {
+                $para = $paragraphs->item($i);
+                if (strpos($para->textContent, '產品QA') !== false) {
+                    $qa_para_position = $i;
                     break;
                 }
             }
             
-            if ($qa_position >= 0) {
-                // 按順序收集QA後的所有span
-                $all_qa_spans = array();
-                $titles = array();
-                $contents = array();
+            if ($qa_para_position >= 0) {
+                // 收集QA後的所有p標籤內容
+                $qa_items = array();
                 
-                for ($i = $qa_position + 1; $i < $spans->length; $i++) {
-                    $span = $spans->item($i);
-                    $text = trim($span->textContent);
+                for ($i = $qa_para_position + 1; $i < $paragraphs->length; $i++) {
+                    $para = $paragraphs->item($i);
+                    if (empty(trim($para->textContent))) continue;
                     
-                    if (empty($text)) continue;
+                    // 檢查此p標籤或其子元素是否包含背景色樣式
+                    $is_title = false;
+                    $style_spans = $xpath_style->query('.//span[contains(@style, "background-color")]', $para);
                     
-                    // 檢查是否為標題（帶有背景色的span）
-                    $style_attr = $span->getAttribute('style');
-                    $is_title = (strpos($style_attr, 'background-color') !== false);
-                    
-                    if ($is_title) {
-                        $titles[] = array('index' => count($all_qa_spans), 'text' => $text);
-                    } else {
-                        $contents[] = array('index' => count($all_qa_spans), 'text' => $text);
+                    if ($style_spans->length > 0) {
+                        $is_title = true;
                     }
                     
-                    $all_qa_spans[] = array(
-                        'text' => $text,
+                    $qa_items[] = array(
+                        'text' => trim($para->textContent),
                         'is_title' => $is_title
                     );
                 }
@@ -268,10 +263,10 @@ function crawler_get_styled_description($url) {
                 $style_html .= '<div class="customerized-accordion-container customerized-accordion">' . "\n";
                 
                 // 逐對創建手風琴項目
-                for ($i = 0; $i < count($all_qa_spans) - 1; $i++) {
-                    if ($all_qa_spans[$i]['is_title'] && !$all_qa_spans[$i+1]['is_title']) {
-                        $title = $all_qa_spans[$i]['text'];
-                        $content = $all_qa_spans[$i+1]['text'];
+                for ($i = 0; $i < count($qa_items) - 1; $i++) {
+                    if ($qa_items[$i]['is_title'] && !$qa_items[$i+1]['is_title']) {
+                        $title = $qa_items[$i]['text'];
+                        $content = $qa_items[$i+1]['text'];
                         
                         // 創建手風琴項目
                         $style_html .= '<div class="customerized-accordion-item">' . "\n";
@@ -299,7 +294,7 @@ function crawler_get_styled_description($url) {
                 
                 $style_html .= '</div>'; // 結束 customerized-accordion-container
             } else {
-                error_log('未找到產品QA在span列表中的位置');
+                error_log('未找到產品QA在段落列表中的位置');
                 $style_html .= '<p>未能正確解析產品QA內容</p>';
             }
         } else {
