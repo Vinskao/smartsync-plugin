@@ -2,7 +2,7 @@
 /*
 Plugin Name: SmartSync Crawler
 Description: 爬取 Jarvis 網站商品資訊
-Version: 2.0
+Version: 2.1
 Author: VinsKao
 */
 
@@ -141,6 +141,64 @@ function crawler_get_styled_description($url) {
     
     $xpath_style = new DOMXPath($dom_style);
     
+    // 查找所有span元素
+    $all_spans = $xpath_style->query('//span');
+    
+    // 查找恰好只包含"產品注意事項"和"產品QA"的span
+    $notice_span = null;
+    $qa_span = null;
+    $notice_position = -1;
+    $qa_position = -1;
+    $all_spans_array = [];
+    
+    // 將所有span元素存入數組，方便後續處理
+    for ($i = 0; $i < $all_spans->length; $i++) {
+        $span = $all_spans->item($i);
+        $text = trim($span->textContent);
+        $all_spans_array[$i] = $span;
+        
+        // 檢查是否為恰好包含"產品注意事項"的span
+        if ($text === '產品注意事項') {
+            $notice_span = $span;
+            $notice_position = $i;
+        }
+        
+        // 檢查是否為恰好包含"產品QA"的span
+        if ($text === '產品QA') {
+            $qa_span = $span;
+            $qa_position = $i;
+        }
+    }
+    
+    // 創建"產品注意事項"到"產品QA"之間的span內容
+    $notice_to_qa_html = '';
+    if ($notice_span !== null && $qa_span !== null && $notice_position < $qa_position) {
+        // 首先添加"產品注意事項"標題
+        $notice_to_qa_html = '<p>產品注意事項</p>' . "\n";
+        
+        // 收集"產品注意事項"到"產品QA"之間的span內容
+        $spans_between = [];
+        for ($i = $notice_position + 1; $i < $qa_position; $i++) {
+            $span = $all_spans_array[$i];
+            $text = trim($span->textContent);
+            if (!empty($text)) {
+                $spans_between[] = $text;
+            }
+        }
+        
+        // 將span內容用雙引號包裹並用<br>分隔
+        if (!empty($spans_between)) {
+            $notice_to_qa_html .= '<p>';
+            foreach ($spans_between as $index => $span_text) {
+                if ($index > 0) {
+                    $notice_to_qa_html .= '<br>';
+                }
+                $notice_to_qa_html .= '"' . $span_text . '"';
+            }
+            $notice_to_qa_html .= '</p>';
+        }
+    }
+    
     // 嘗試多種方法查找產品QA相關內容
     $style_html = '';
     
@@ -229,9 +287,28 @@ function crawler_get_styled_description($url) {
         }
     }
     
-    // 合併內容並在圖片和文字之間加入換行符號，然後徹底移除超連結
-    $final_html = $png_html . '<br>' . $style_html;
-    
+    // 合併內容：圖片 + 產品注意事項到產品QA之間的內容 + QA內容
+    $final_html = $png_html . '<br>' . $notice_to_qa_html . '<br>';
+
+    // 嘗試從QA部分中移除已經在notice_to_qa_html包含的內容
+    if (!empty($notice_to_qa_html) && !empty($style_html)) {
+        // 提取所有在產品注意事項到產品QA之間的文本內容
+        preg_match_all('/"([^"]+)"/', $notice_to_qa_html, $notice_matches);
+        
+        // 如果有匹配到注意事項內容
+        if (!empty($notice_matches[1])) {
+            // 對於每一個注意事項文本，從style_html中移除對應的<p>標籤
+            foreach ($notice_matches[1] as $notice_text) {
+                // 注意轉義正則表達式特殊字符
+                $escaped_text = preg_quote($notice_text, '/');
+                $style_html = preg_replace('/<p>' . $escaped_text . '<\/p>\s*/', '', $style_html);
+            }
+        }
+    }
+
+    // 添加QA內容
+    $final_html .= $style_html;
+
     // 使用正則徹底移除所有超連結（包括嵌套情況）
     $final_html = preg_replace('/<a\b[^>]*>(.*?)<\/a>/is', '$1', $final_html);
     
