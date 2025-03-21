@@ -2,7 +2,7 @@
 /*
 Plugin Name: SmartSync Crawler
 Description: 爬取 Jarvis 網站商品資訊
-Version: 2.2
+Version: 2.3
 Author: VinsKao
 */
 
@@ -131,6 +131,14 @@ function crawler_get_styled_description($url) {
         }
         
         $png_html .= $dom_images->saveHTML($new_img);
+    }
+
+    // 添加这段代码，将所有图片包装在一个div中
+    if (!empty($png_html)) {
+        $png_html = '<div class="elementor-element elementor-widget elementor-widget-image" data-element_type="widget" data-widget_type="image.default">' . 
+                    '<div class="elementor-widget-container">' . 
+                    $png_html . 
+                    '</div></div>';
     }
 
     // 使用DOM提取樣式區域，保留整段HTML元素
@@ -535,7 +543,7 @@ function crawler_download_product_urls() {
     if (!current_user_can('manage_options')) {
         wp_die('權限不足', 403);
     }
-
+    
     try {
         // 獲取爬蟲範圍 (1-based轉為0-based)
         $start_index = isset($_POST['start_index']) ? (intval($_POST['start_index']) - 1) : 0;
