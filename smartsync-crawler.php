@@ -2,7 +2,7 @@
 /*
 Plugin Name: SmartSync Crawler
 Description: 爬取 Jarvis 網站商品資訊
-Version: 2.3
+Version: 2.6
 Author: VinsKao
 */
 
@@ -109,28 +109,45 @@ function crawler_get_styled_description($url) {
     $png_html = '';
     foreach ($img_nodes as $img) {
         $src = $img->getAttribute('src');
-        // 排除不需要的圖片路徑
+        // 檢查圖片URL是否包含 /images/companies
+        if (strpos($src, '/images/companies') === false) {
+            continue;
+        }
+        
+        // 排除包含 /ICON/ 的圖片
+        if (strpos($src, '/ICON/') !== false) {
+            continue;
+        }
+
+        // 排除img中有width<500的圖片
+        if($img->getAttribute('width') < 500) {
+            continue;
+        }
+        
+        // 排除其他不需要的圖片路徑
         if (strpos($src, '/footer_icon/') !== false ||
             strpos($src, '/logos/') !== false ||
-            strpos($src, '/ICON/') !== false ||
             strpos($src, 'download') !== false ||
             strpos($src, 'meta property') !== false) {
             continue;
         }
         
-        // 重建圖片標籤，確保屬性格式正確
-        $new_img = $dom_images->createElement('img');
-        $new_img->setAttribute('src', $src);
-        $new_img->setAttribute('alt', $img->getAttribute('alt'));
-        $new_img->setAttribute('title', $img->getAttribute('title'));
+        // 獲取圖片屬性
+        $alt = $img->getAttribute('alt');
         
-        // 處理class屬性（移除多餘空格和引號）
-        $class = trim(preg_replace('/\s+/', ' ', $img->getAttribute('class')));
-        if (!empty($class)) {
-            $new_img->setAttribute('class', $class);
-        }
+        // 設置固定寬度
+        $original_width = 1903;
         
-        $png_html .= $dom_images->saveHTML($new_img);
+        // 為每個圖片單獨創建指定的div結構 (使用更簡潔的格式)
+        $img_html = '<div class="elementor-element elementor-widget elementor-widget-image" data-element_type="widget" data-widget_type="image.default">' . "\n" .
+                   '    <div class="elementor-widget-container">' . "\n" .
+                   '        <img decoding="async" ' . "\n" .
+                   '             src="' . $src . '" ' . "\n" .
+                   '             class="attachment-full size-full">' . "\n" .
+                   '    </div>' . "\n" .
+                   '</div>';
+        
+        $png_html .= $img_html;
     }
 
     // 添加这段代码，将所有图片包装在一个div中
@@ -387,37 +404,13 @@ function crawler_get_styled_description($url) {
     }
     
     // 合併內容：圖片 + 產品注意事項到產品QA之間的內容 + QA內容
-    $css_js_links = '<link rel="stylesheet" href="style.css">
-<!-- Add Font Awesome -->
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
-<!-- Add jQuery -->
-<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>';
+    $css_js_links = '<link rel="stylesheet" href="style.css"><!-- Add Font Awesome --><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css"><!-- Add jQuery --><script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>';
 
-    $js_code = '<script>
-jQuery(document).ready(function($) {
-    $(\'.customerized-accordion-container .customerized-accordion-title\').on(\'click\', function() {
-        var $accordionItem = $(this).closest(\'.customerized-accordion-item\');
-        var $content = $accordionItem.find(\'.customerized-accordion-content\');
-        
-        if ($(this).hasClass(\'active\')) {
-            $(this).removeClass(\'active\');
-            $content.slideUp(200, \'swing\');
-        } else {
-            // Close all other accordion items
-            $(this).closest(\'.customerized-accordion-container\').find(\'.customerized-accordion-title\').removeClass(\'active\');
-            $(this).closest(\'.customerized-accordion-container\').find(\'.customerized-accordion-content\').slideUp(200, \'swing\');
-            
-            // Open clicked accordion item
-            $(this).addClass(\'active\');
-            $content.slideDown(200, \'swing\');
-        }
-    });
-});
-</script>';
+    $js_code = '<script>jQuery(document).ready(function($) {$(\'.customerized-accordion-container .customerized-accordion-title\').on(\'click\', function() {var $accordionItem = $(this).closest(\'.customerized-accordion-item\');var $content = $accordionItem.find(\'.customerized-accordion-content\');if ($(this).hasClass(\'active\')) {$(this).removeClass(\'active\');$content.slideUp(200, \'swing\');} else {$(this).closest(\'.customerized-accordion-container\').find(\'.customerized-accordion-title\').removeClass(\'active\');$(this).closest(\'.customerized-accordion-container\').find(\'.customerized-accordion-content\').slideUp(200, \'swing\');$(this).addClass(\'active\');$content.slideDown(200, \'swing\');}});});</script>';
 
     // 檢查style_html是否包含手風琴結構，如果有則添加container包裹
     if (strpos($style_html, 'customerized-accordion-container') !== false) {
-        // 在手風琴外層添加container div
+        // 在手風琴外層添加container div (使用單行模式)
         $style_html = preg_replace(
             '/(<div class="customerized-accordion-container customerized-accordion">.*?<\/div>)$/s',
             '<div class="container">$1</div>',
@@ -425,7 +418,12 @@ jQuery(document).ready(function($) {
         );
     }
 
-    $final_html = $css_js_links . "\n" . $js_code . "\n" . $png_html . '<br>' . $notice_to_qa_html . '<br>';
+    // 組合所有內容並移除換行符
+    $final_html = $css_js_links . $js_code . $png_html . '<br>' . $notice_to_qa_html . '<br>' . $style_html;
+    
+    // 移除所有換行符和多餘空格，確保CSV格式正確
+    $final_html = str_replace(["\r\n", "\r", "\n"], "", $final_html);
+    $final_html = preg_replace('/\s{2,}/', ' ', $final_html);
 
     // 嘗試從QA部分中移除已經在notice_to_qa_html包含的內容
     if (!empty($notice_to_qa_html) && !empty($style_html)) {
@@ -442,9 +440,6 @@ jQuery(document).ready(function($) {
             }
         }
     }
-
-    // 添加QA內容
-    $final_html .= $style_html;
 
     // 使用正則徹底移除所有超連結（包括嵌套情況）
     $final_html = preg_replace('/<a\b[^>]*>(.*?)<\/a>/is', '$1', $final_html);
@@ -515,18 +510,18 @@ function crawler_get_product_images($url) {
     libxml_clear_errors();
     
     $xpath = new DOMXPath($dom);
-    $images = $xpath->query('//img[contains(@src, ".png")]');
+    // 修改查詢條件，只選擇具有 id="det_img_xxxxxx" 格式的圖片
+    $images = $xpath->query('//img[starts-with(@id, "det_img_")]');
 
     $image_links = [];
     foreach ($images as $img) {
         $src = $img->getAttribute('src');
         if (!empty($src)) {
-            // 排除包含 /footer_icon/、/logos/ 和 /ICON/ 的圖片連結
-            if (strpos($src, '/footer_icon/') === false &&
-                strpos($src, '/logos/') === false &&
-                strpos($src, '/ICON/') === false) {
-                $image_links[] = $src;
+            // 檢查圖片URL是否包含 /35/
+            if (strpos($src, '/35/') !== false) {
+                continue;
             }
+            $image_links[] = $src;
         }
     }
 
@@ -611,11 +606,23 @@ function crawler_download_product_urls() {
         
         // 寫入數據（根據新的欄位順序）
         foreach ($product_urls as $index => $url) {
+            // 處理描述數據，確保CSV格式正確
+            $description = $product_styled_descriptions[$index];
+            
+            // 移除實際換行符，確保CSV數據保持在同一單元格
+            $description = str_replace(["\r\n", "\r", "\n"], "", $description);
+            
+            // 使用臨時標記來處理HTML中的引號
+            $description = str_replace('"', '__TEMP_QUOTE__', $description);
+            
+            // 將臨時標記轉換回單個引號
+            $description = str_replace('__TEMP_QUOTE__', '"', $description);
+            
             fputcsv($file_handle, [
                 $url, 
                 $product_names[$index], 
                 $product_short_descriptions[$index], 
-                $product_styled_descriptions[$index],
+                $description,  // 使用處理過的描述
                 $product_actual_prices[$index], 
                 $product_original_prices[$index],
                 $product_images[$index]
